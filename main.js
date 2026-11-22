@@ -238,8 +238,9 @@
 // The sky behind the page. Two looks, chosen in the dashboard:
 //   "maths": numbers, equations and maths symbols (the default)
 //   "space": planets, stars, astronauts, ships and rockets
-// or it can be switched off. Whatever is there drifts at different speeds as
-// the page scrolls, and when the mouse comes near it turns and slides away,
+// or it can be switched off. Whatever is there floats slowly on its own all the
+// time, drifts faster at different speeds as the page scrolls, and when the
+// mouse comes near it turns and slides away,
 // then eases back. Decorative only: hidden from screen readers, never in the
 // way of a click, and still when motion is reduced.
 (function () {
@@ -300,16 +301,22 @@
   }
 
   var still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  var mx = -9999, my = -9999, awakeUntil = 0, running = false;
+  var mx = -9999, my = -9999, last = 0, t = 0;
   var REACH = 160, PUSH = 2.2, SPRING = 0.03, DRAG = 0.86;
 
   function place(time) {
-    var sy = still ? 0 : window.scrollY, moving = false, loop = H + 160;
+    // t is the seconds the sky has been on screen; a long gap (a hidden tab) counts as one frame
+    if (last) t += Math.min(0.05, (time - last) / 1000);
+    last = time;
+    var sy = still ? 0 : window.scrollY, loop = H + 160;
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
-      // where it would sit with no mouse nearby: scrolled up by its depth, looping, with a slow sway
-      var bx = it.x * W + Math.sin(sy / 260 + it.sway) * 14 * it.dir;
-      var by = ((((it.y * loop - sy * it.depth) % loop) + loop) % loop) - 80;
+      // where it would sit with no mouse nearby: floating up on its own, faster while the
+      // page scrolls, looping, with a slow sway from side to side
+      var bx = it.x * W + Math.sin(sy / 260 + t * 0.35 + it.sway) * 20 * it.dir;
+      var by = ((((it.y * loop - sy * it.depth - t * (6 + it.depth * 45)) % loop) + loop) % loop) - 80;
+      // icons turn slowly all the time; writing only rocks a little, so it stays readable
+      var idle = it.written ? Math.sin(t * 0.4 + it.sway) * 4 : t * it.turn * 70;
       if (!still) {
         var dx = bx + it.ox - mx, dy = by + it.oy - my, d = Math.sqrt(dx * dx + dy * dy);
         if (d < REACH) {
@@ -320,25 +327,20 @@
         it.vx += -it.ox * SPRING; it.vy += -it.oy * SPRING;
         it.vx *= DRAG; it.vy *= DRAG; it.spin *= 0.94;
         it.ox += it.vx; it.oy += it.vy; it.rot += it.spin;
-        if (Math.abs(it.vx) + Math.abs(it.vy) + Math.abs(it.ox) + Math.abs(it.oy) + Math.abs(it.spin) > 0.08) moving = true;
       }
       it.el.style.transform = "translate3d(" + (bx + it.ox - it.w / 2).toFixed(1) + "px," + (by + it.oy - it.h / 2).toFixed(1) +
-        "px,0) rotate(" + (it.rot + sy * it.turn).toFixed(1) + "deg)";
+        "px,0) rotate(" + (it.rot + sy * it.turn + idle).toFixed(1) + "deg)";
     }
-    if (moving || time < awakeUntil) requestAnimationFrame(place); else running = false;
-  }
-  function wake() {
-    awakeUntil = performance.now() + 400;
-    if (!running) { running = true; requestAnimationFrame(place); }
+    // keeps going on its own; the browser pauses these frames while the tab is hidden
+    if (!still) requestAnimationFrame(place);
   }
 
   place(0);
   if (still) return;
-  window.addEventListener("scroll", wake, { passive: true });
-  window.addEventListener("resize", function () { W = window.innerWidth; H = window.innerHeight; wake(); });
+  window.addEventListener("resize", function () { W = window.innerWidth; H = window.innerHeight; });
   if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
-    document.addEventListener("pointermove", function (e) { if (e.pointerType !== "touch") { mx = e.clientX; my = e.clientY; wake(); } });
-    document.documentElement.addEventListener("pointerleave", function () { mx = my = -9999; wake(); });
+    document.addEventListener("pointermove", function (e) { if (e.pointerType !== "touch") { mx = e.clientX; my = e.clientY; } });
+    document.documentElement.addEventListener("pointerleave", function () { mx = my = -9999; });
   }
 })();
 
