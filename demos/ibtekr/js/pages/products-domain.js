@@ -1,0 +1,744 @@
+
+/* Products + marketing «إنشاء» domain — pure functions (UMD). Rules from the owner (25 Oct 2026):
+   SKU = IBTK + size + color + supplier + category + design + 6-digit serial; image name = Product name-00-SKU;
+   sale = vendor ÷ (1 − Ibtekr rate); regular = sale ÷ (1 − discount); trash kept 30 days. */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.IbtekrProducts = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+  const SKU_PARTS = ['size', 'color', 'supplier', 'category', 'design'];
+  const pad6 = (n) => String(n).padStart(6, '0');
+  function skuParts(c) {
+    const missing = SKU_PARTS.filter((k) => !c[k]);
+    const sku = 'IBTK' + SKU_PARTS.map((k) => c[k] || '?').join('') + pad6(c.serial || 0);
+    return { sku, complete: missing.length === 0, missing };
+  }
+  const buildSku = (c) => skuParts(c).sku;
+  const serialStart = ({ isNew, from }) => (isNew ? 1 : parseInt(String(from || '1').replace(/\D/g, ''), 10) || 1);
+  const serials = (start, n) => Array.from({ length: n }, (_, i) => start + i);
+  const sizeCode = (s) => String(s || '').replace(/[^\d]+/g, ' ').trim().split(/\s+/).join('');
+  function price(vendor, rate, discount) {
+    const sale = Math.round(vendor / (1 - rate));
+    const regular = Math.round(sale / (1 - (discount || 0)));
+    return { sale, regular, share: sale - vendor };
+  }
+  const DISCOUNTS = [0.15, 0.18, 0.2, 0.22, 0.25, 0.28, 0.3];
+  const rotatingDiscount = (i) => DISCOUNTS[i % DISCOUNTS.length];
+  const slug = (name) => String(name || '').trim().split(/\s+/).join('-');
+  const imageName = (name, idx, sku) => slug(name) + '-' + String(idx).padStart(2, '0') + '-' + sku + '.webp';
+  const imagePath = (sku, color, name, idx) => sku + '/' + color + '/' + imageName(name, idx, sku);
+  function combos(opts) {
+    const keys = Object.keys(opts || {}).filter((k) => (opts[k] || []).length);
+    if (!keys.length) return [];
+    return keys.reduce((acc, k) => acc.flatMap((a) => opts[k].map((v) => Object.assign({}, a, { [k]: v }))), [{}]);
+  }
+  function stockState(qty, onDemand, alert) {
+    if (onDemand) return 'حسب الطلب';
+    if (qty <= 0) return 'نفد';
+    if (qty <= (alert == null ? 3 : alert)) return 'قليل';
+    return 'متاح';
+  }
+  const CHECKS = [['nameEn', 'الاسم EN'], ['nameAr', 'الاسم AR'], ['sku', 'SKU'], ['price', 'السعر'], ['images', 'الصور'], ['category', 'القسم'], ['weight', 'الوزن'], ['sizeImage', 'صورة المقاس'], ['desc', 'الوصف']];
+  function completeness(p) {
+    const missing = CHECKS.filter(([k]) => !p[k]).map(([, l]) => l);
+    return { missing, pct: Math.round(((CHECKS.length - missing.length) / CHECKS.length) * 100) };
+  }
+  const days = (a, b) => Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 864e5);
+  const TRASH_DAYS = 30;
+  const trashDaysLeft = (movedAt, today) => Math.max(0, TRASH_DAYS - days(movedAt, today));
+  const trashSoon = (left) => left <= 5;
+  function moveVendor(p, { vendor, code, keepSku }) {
+    const out = Object.assign({}, p, { vendor });
+    if (!keepSku && code && /^IBTK/.test(p.sku)) {
+      // supplier code sits right after size + color; size code length varies, so swap the char before category+design+serial (8 chars from the end)
+      const s = p.sku; const i = s.length - 6 - 2 - 1;
+      out.sku = s.slice(0, i) + code + s.slice(i + 1); out.oldSku = s;
+    }
+    return out;
+  }
+  const bumpPrice = (v, pct) => Math.round(v * (1 + pct / 100));
+  // كود التصميم من اسم المنتج (owner 26 Oct): النوع = الاسم قبل «—». لو موجود في جدول الأكواد ياخد كوده،
+  // غير كده بيتعمل كود جديد تلقائي: أول حرف، وبعدين أول حرفين من الكلمتين، وبعدين أول حرفين — من غير تكرار.
+  const designBase = (name) => String(name || '').split(/\s+[—–-]\s+/)[0].trim();
+  function designCode(name, table, taken) {
+    const base = designBase(name); if (!base) return { code: '', base, isNew: false };
+    const hit = (table || []).find((x) => String(x[0]).toLowerCase() === base.toLowerCase()); if (hit) return { code: hit[1], base, isNew: false };
+    const used = new Set((table || []).map((x) => x[1]).concat(taken || []));
+    const w = base.replace(/[^A-Za-z0-9 ]/g, ' ').trim().split(/\s+/).filter(Boolean); const up = (x) => x.toUpperCase();
+    const cands = [w[0] && up(w[0][0]), w.length > 1 && up(w[0][0] + w[1][0]), w[0] && up(w[0].slice(0, 2)), w.length > 1 && up(w[0][0] + w[w.length - 1][0])].filter(Boolean);
+    for (const c of cands) if (!used.has(c)) return { code: c, base, isNew: true };
+    for (const a of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') { const c = up((w[0] || 'X')[0]) + a; if (!used.has(c)) return { code: c, base, isNew: true }; }
+    return { code: '', base, isNew: true };
+  }
+  // مقاسات الصور (owner 26 Oct): مقاس المنتج على الموقع + كل مقاسات السوشيال. موديلات الصور من كتالوج Magnific (الأسماء الحقيقية).
+  const IMG_SIZES = Object.freeze([
+    { id: '700x800', label: '700 × 800 · صورة المنتج (الموقع)', group: 'الموقع', def: true },
+    { id: '1080x1350', label: '1080 × 1350 · انستجرام بوست 4:5', group: 'انستجرام' }, { id: '1080x1080', label: '1080 × 1080 · انستجرام مربع 1:1', group: 'انستجرام' }, { id: '1080x1920', label: '1080 × 1920 · ستوري / ريلز 9:16', group: 'انستجرام' },
+    { id: '1200x630', label: '1200 × 630 · فيسبوك بوست / لينك', group: 'فيسبوك' }, { id: '1640x624', label: '1640 × 624 · فيسبوك كوفر', group: 'فيسبوك' },
+    { id: '1080x1920t', label: '1080 × 1920 · تيك توك 9:16', group: 'تيك توك' }, { id: '1000x1500', label: '1000 × 1500 · بنترست 2:3', group: 'بنترست' },
+    { id: '1600x900', label: '1600 × 900 · X (تويتر) 16:9', group: 'X' }, { id: '1200x627', label: '1200 × 627 · لينكدإن', group: 'لينكدإن' }, { id: '1280x720', label: '1280 × 720 · يوتيوب ثامبنيل', group: 'يوتيوب' }]);
+  // مقاس مخصص (owner 27 Oct): عرض × طول بالبكسل — من 256 لـ 4096، والنسبة مش أكتر من 4:1
+  const CUSTOM_MIN = 256, CUSTOM_MAX = 4096;
+  function customSize(w, hgt) {
+    const W = Number(String(w == null ? '' : w).replace(/[٠-٩]/g, (c) => '٠١٢٣٤٥٦٧٨٩'.indexOf(c)).trim()), H = Number(String(hgt == null ? '' : hgt).replace(/[٠-٩]/g, (c) => '٠١٢٣٤٥٦٧٨٩'.indexOf(c)).trim());
+    const e = {};
+    if (!Number.isInteger(W) || W < CUSTOM_MIN || W > CUSTOM_MAX) e.w = 'العرض من ' + CUSTOM_MIN + ' لـ ' + CUSTOM_MAX + ' بكسل';
+    if (!Number.isInteger(H) || H < CUSTOM_MIN || H > CUSTOM_MAX) e.h = 'الطول من ' + CUSTOM_MIN + ' لـ ' + CUSTOM_MAX + ' بكسل';
+    if (!e.w && !e.h && Math.max(W, H) / Math.min(W, H) > 4) e.h = 'النسبة كبيرة أوي — أقصى حاجة 4:1';
+    return { ok: !e.w && !e.h, w: W, h: H, errors: e, label: !e.w && !e.h ? W + ' × ' + H + ' · مقاس مخصص' : 'مقاس مخصص' };
+  }
+  const IMG_MODELS = Object.freeze([
+    { id: 'seedream-5-pro', name: 'Seedream 5 Pro', credits: 2, def: true, note: 'الافتراضي — منتجات وتعديل بالمرجعية' },
+    { id: 'imagen-nano-banana-2', name: 'Google Nano Banana Pro', credits: 3, note: 'أدق في تفاصيل المنتج والبراند' },
+    { id: 'imagen-nano-banana-2-lite', name: 'Google Nano Banana 2 Lite', credits: 1, note: 'سريع ورخيص — للتجارب' },
+    { id: 'recraft-v4-1', name: 'Recraft V4.1', credits: 2, note: 'نص لصورة من غير مرجعية' },
+    { id: 'gpt-2', name: 'GPT 2', credits: 3, note: 'بوستات فيها كلام وتصميمات' },
+    { id: 'magnific-one', name: 'Magnific One', credits: 4, note: 'الوحيد اللي بيشتغل بـ Brand Kit' }]);
+  const imgCredits = (count, modelId) => (Number(count) || 0) * ((IMG_MODELS.find((m) => m.id === modelId) || IMG_MODELS[0]).credits);
+  function validateCode(code, used) {
+    if (!code) return 'اكتب الكود';
+    if (!/^[A-Za-z0-9]{1,2}$/.test(code)) return 'حرف أو حرفين بالإنجليزي أو أرقام';
+    if ((used || []).includes(code)) return 'الكود ده مستخدم قبل كده';
+    return '';
+  }
+  function groupImages(files) {
+    const g = {};
+    files.forEach((f) => { const m = /^(\d+)/.exec(f); if (!m) return; (g[m[1]] = g[m[1]] || []).push(f); });
+    const ordered = {}; Object.keys(g).sort((a, b) => a - b).forEach((k) => { ordered[k] = g[k]; });
+    return ordered;
+  }
+  // ---------- v2 (26 Oct): variants SKU = parent + suffix, image slots, credits, multi-category, bulk price ----------
+  const variantSku = (parent, codes) => String(parent || '') + (codes || []).filter(Boolean).map((c) => '-' + c).join('');
+  const SLOTS = ['Close-up', 'البيئة المحيطة', 'Feature', 'المقاسات'];
+  const SLOT_HINT = ['تركيز على المنتج', 'المنتج في مكانه', 'ميزة أو تفصيلة', 'الأبعاد على المنتج'];
+  // Phase 5.4 decision 11 (the owner generates on the Magnific site, the system writes the prompt): the same words the server's
+  // slotPrompt in supabase/functions/_shared/ai-images.js sends the provider — the base, the subject from the item's data (the
+  // name, the color, the material, the style, the brand) and the slot's scene (0 close-up, 1 the product in its place, 2 a craft
+  // detail, 3 the proportions with the sizes, extras = another angle; a color slot = the close-up in that color). Kept in step
+  // with the server's by tests/domain/products-domain.test.mjs. Plain text only: tags, < > and control characters are stripped.
+  const PROMPT_BASE = 'Professional e-commerce product photography, photorealistic, sharp focus, true colors, no text, no watermark, no logo.';
+  // decision 14 (the owner, 1 Nov): the result is center-cropped to 7:8 (700×800) — the same words as the server's FRAME_NOTE
+  const FRAME_NOTE = 'Framing for a later center crop to 7:8: the whole product sits in the middle of the frame with clear empty margins above and below it (at least 12% of the height each), nothing important near the top or bottom edges.';
+  const promptLine = (v, max) => { if (typeof v !== 'string') return ''; const s = v.replace(/<[^>]*>/g, ' ').replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim(); return s.length <= max ? s : s.slice(0, max).replace(/\s+\S*$/, ''); };
+  function slotPrompt(item, slot, ctx) {
+    const it = item && typeof item === 'object' ? item : {}; ctx = ctx || {};
+    const parts = [promptLine(it.nameEn, 120), ctx.colorName ? 'in ' + promptLine(ctx.colorName, 40) : '', it.material ? 'made of ' + promptLine(it.material, 60) : '', it.style ? promptLine(it.style, 40) + ' style' : ''].filter(Boolean);
+    const brand = ctx.brand ? ' by the handmade brand ' + promptLine(ctx.brand, 60) : '';
+    const subject = (parts.join(', ') || 'the handmade product') + brand;
+    const sizes = Array.isArray(it.sizes) ? it.sizes.map((s) => promptLine(String(s), 30)).filter(Boolean).join(', ') : '';
+    const k = slot && typeof slot === 'object' ? 'color' : ['closeup', 'environment', 'feature', 'sizes'][slot] || 'extra';
+    const scene = k === 'closeup' || k === 'color' ? 'Keep the exact same product from the reference photo, centered, on a clean warm cream studio background, soft natural window light, gentle shadow, portrait framing.'
+      : k === 'environment' ? 'Show the exact same product from the reference photo in its natural place in a warm, modern Egyptian home interior, styled lifestyle scene, afternoon daylight, nothing covering the product.'
+      : k === 'feature' ? 'A close detail shot of the exact same product from the reference photo: the material, the handmade craft and texture, shallow depth of field.'
+      : k === 'sizes' ? 'The exact same product from the reference photo, full view on a plain light background, framed to show its proportions' + (sizes ? ' (' + sizes + ')' : '') + ', space around it for dimension lines.'
+      : 'Another angle of the exact same product from the reference photo on a clean warm cream studio background, soft light.';
+    return [PROMPT_BASE, subject + '.', scene, FRAME_NOTE].join(' ');
+  }
+  function credits({ images, texts, data }) { return (images || 0) * 1 + (texts || 0) * 1 + Math.ceil((data || 0) / 4); }
+  const catsOf = (p) => (Array.isArray(p.cats) && p.cats.length ? p.cats : String(p.category || '').split(' + ').filter(Boolean));
+  const inCategory = (p, cat) => !cat || catsOf(p).includes(cat);
+  // target: 'vendor' (سعر المبتكر → sale recalculated) | 'rate' (نسبة إبتكر, points) | 'discount' (الخصم الوهمي, points) ; mode 'pct' | 'value' ; dir +1 | -1
+  // one rule for «نسبة إبتكر ± …» wherever it is applied (a product's price, a maker's rate, a category's): ± a share of it, or ± points, kept in 0–90
+  function shiftRate(rate, { mode, dir, amount }) {
+    const a = Number(amount) || 0; const sgn = dir < 0 ? -1 : 1; const r0 = Number(rate) || 0;
+    return Math.min(90, Math.max(0, mode === 'pct' ? +(r0 * (1 + (sgn * a) / 100)).toFixed(1) : +(r0 + sgn * a).toFixed(2)));
+  }
+  // comments 15 Nov decision 82 (the owner on «تعديل سعر منتج» — «لما اعدل نسبة ابتكر … يظهرلي تحتيها ال vendors … و المقدار اللي هزوده يزيد علي
+  // الفيندور كله لو انا محدد كل منتجات الفيندور ده مش محدد قسم معين و في حالة تحديد قسم معين … يظهرلي الاقسام … و كل اللي انا بقوله ده مرتبط بالنسبة
+  // بتاعة المبتكرين»): whose commission a change of Ibtekr's rate on the picked products touches. Per maker of the picked products:
+  //   whole — every product of his in the records is picked → his whole commission moves (the general rate and each category's own);
+  //   cats  — the picked ones are all his products of some categories → those categories' rates move (the top-most such categories);
+  //   rest  — what is left of his picked products belongs to no such category: only their price is recalculated.
+  // picked / all: [{ id, vendorId, categoryIds }]; parentOf(catId) → its parent's id or null.
+  function rateScopes(picked, all, parentOf) {
+    const by = (list) => { const m = new Map(); (list || []).forEach((p) => { if (!p || !p.vendorId) return; const k = String(p.vendorId); if (!m.has(k)) m.set(k, []); m.get(k).push(p); }); return m; };
+    const P = by(picked); const A = by(all); const out = [];
+    const up = (id) => { const seen = new Set(); const l = []; let cur = parentOf ? parentOf(id) : null; while (cur != null && !seen.has(cur)) { seen.add(cur); l.push(Number(cur)); cur = parentOf(cur); } return l; };
+    P.forEach((sel, vid) => {
+      const mine = A.get(vid) || sel; const ids = new Set(sel.map((p) => String(p.id)));
+      const whole = mine.every((p) => ids.has(String(p.id)));
+      let cats = []; let rest = 0;
+      if (!whole) {
+        const cand = new Set(); sel.forEach((p) => (p.categoryIds || []).forEach((c) => cand.add(Number(c))));
+        const covered = new Set([...cand].filter((c) => mine.filter((p) => (p.categoryIds || []).map(Number).includes(c)).every((p) => ids.has(String(p.id)))));
+        cats = [...covered].filter((c) => !up(c).some((x) => covered.has(x))).sort((x, y) => x - y);
+        rest = sel.filter((p) => !(p.categoryIds || []).some((c) => covered.has(Number(c)))).length;
+      }
+      out.push({ vendorId: vid, picked: sel.length, total: mine.length, whole, cats, rest });
+    });
+    return out;
+  }
+  // what the maker's commission becomes for that scope: the input of his «الاتفاق التجاري» write ({ type, rate, flat, categories })
+  // and the lines the popup shows ({ kind: 'general' | 'category', id, from, to }). v: { rate, rateFlat, commissionType,
+  // categoryRates: [{ wooCategoryId, rate, flat }] }. null when there is nothing to write (no general rate to start from, or a
+  // scope that covers no category). `over` = a new rate past 65, the most a commission takes — the write is not sent then.
+  function ratePlan(scope, v, o, parentOf, max) {
+    if (!scope || !v || v.rate == null) return null;
+    const cap = max == null ? 65 : max; const own = new Map((v.categoryRates || []).filter((c) => c && c.rate != null).map((c) => [Number(c.wooCategoryId), c]));
+    const flat = v.rateFlat == null ? null : Number(v.rateFlat);
+    const eff = (id) => { const seen = new Set(); let cur = Number(id); while (cur != null && !seen.has(cur)) { seen.add(cur); if (own.has(cur)) return own.get(cur); const pr = parentOf ? parentOf(cur) : null; cur = pr == null ? null : Number(pr); } return null; };
+    const under = (id, top) => { const seen = new Set(); let cur = parentOf ? parentOf(id) : null; while (cur != null && !seen.has(cur)) { if (Number(cur) === Number(top)) return true; seen.add(cur); cur = parentOf(cur); } return false; };
+    const lines = []; const cats = []; let rate = Number(v.rate); let type = v.commissionType === 'category_based' ? 'category_based' : 'fixed';
+    if (scope.whole) {
+      const to = shiftRate(rate, o); lines.push({ kind: 'general', id: null, from: rate, to }); rate = to;
+      // his categories' own rates move with him — when they are what he pays (a «ثابت» maker's old category rows are not in effect)
+      if (type === 'category_based') own.forEach((c, id) => { const t = shiftRate(c.rate, o); lines.push({ kind: 'category', id, from: Number(c.rate), to: t }); cats.push({ id, rate: t, flat: c.flat == null ? null : Number(c.flat) }); });
+    } else {
+      if (!scope.cats || !scope.cats.length) return null;
+      type = 'category_based';
+      scope.cats.forEach((id) => { const e = eff(id); const from = e ? Number(e.rate) : rate; const to = shiftRate(from, o);
+        lines.push({ kind: 'category', id: Number(id), from, to }); cats.push({ id: Number(id), rate: to, flat: e && e.flat != null ? Number(e.flat) : null });
+        // a sub-category with a rate of its own keeps following its parent's move
+        own.forEach((c, cid) => { if (cid !== Number(id) && under(cid, id)) { const t = shiftRate(c.rate, o); lines.push({ kind: 'category', id: cid, from: Number(c.rate), to: t }); cats.push({ id: cid, rate: t, flat: c.flat == null ? null : Number(c.flat) }); } }); });
+    }
+    const changed = lines.some((l) => l.from !== l.to);
+    return { input: { type, rate, flat, categories: cats }, lines, over: lines.some((l) => l.to > cap), changed };
+  }
+  function bulkPrice(p, { target, mode, dir, amount }) {
+    const a = Number(amount) || 0; const sgn = dir < 0 ? -1 : 1; const rate = p.rate != null ? p.rate : 33; const disc = p.disc != null ? p.disc : 20;
+    const bump = (v) => (mode === 'pct' ? Math.round(v * (1 + (sgn * a) / 100)) : Math.round(v + sgn * a));
+    let vendorPrice = p.vendorPrice, r = rate, d = disc;
+    if (target === 'vendor') vendorPrice = Math.max(0, bump(p.vendorPrice));
+    else if (target === 'rate') r = shiftRate(rate, { mode, dir, amount });
+    else d = Math.min(90, Math.max(0, mode === 'pct' ? +(disc * (1 + (sgn * a) / 100)).toFixed(1) : disc + sgn * a));
+    const pr = price(vendorPrice, r / 100, d / 100);
+    return { vendorPrice, rate: r, disc: d, sale: pr.sale, regular: pr.regular };
+  }
+  // ---------- التسعير من سعر المبتكر (صاحب المشروع 28 أكتوبر، قرار 16 في خطة المرحلة 5) ----------
+  // سعر التخفيض = (سعر المبتكر + الرسوم) ÷ (1 − النسبة) لفوق لأقرب 10؛ السعر العادي (وهمي) = سعر التخفيض + 15–30% عشوائي لفوق لأقرب 10.
+  const ceil10 = (x) => Math.ceil(Math.round(x * 1000) / 10000) * 10; // the rounding first: 1660.0000001 stays 1660
+  const MARKUP_MIN = 15, MARKUP_MAX = 30;
+  const randomMarkup = (rng) => MARKUP_MIN + Math.floor(Math.min(0.999999, Math.max(0, (rng || Math.random)())) * (MARKUP_MAX - MARKUP_MIN + 1));
+  // ---------- الخصم الوهمي بالشرايح (صاحب المشروع 15 نوفمبر — docs/superpowers/plans/2026-11-15-fake-discount.md) ----------
+  // «لو سعر البيع من 0 ل 1000 يبقي هنزود ف الخصم الوهمي 500 … لو 1001 ل 2000 هنزود 1000 … 2001 … فيما فوق هنزود 1500». القاعدة شرايح على
+  // سعر البيع: { to: آخر سعر في الشريحة | null = «فيما فوق», type: 'amount' (ج.م) | 'percent', value }. «من» = آخر «لحد» + 1.
+  const FAKE_MAX = 20, FAKE_AMOUNT_MAX = 1000000, FAKE_PERCENT_MAX = 500, FAKE_TO_MAX = 100000000;
+  // أي شكل محفوظ → { tiers } مرتّبة («فيما فوق» في الآخر، «لحد» مكرر = الأولى بس) أو null لو مفيش شريحة صالحة
+  function fakeRule(raw) {
+    const list = raw && Array.isArray(raw.tiers) ? raw.tiers : Array.isArray(raw) ? raw : [];
+    const closed = []; let open = null;
+    for (const t of list) {
+      if (!t || typeof t !== 'object') continue;
+      const type = t.type === 'percent' ? 'percent' : 'amount'; const value = Number(t.value);
+      if (!Number.isFinite(value) || value <= 0 || value > (type === 'percent' ? FAKE_PERCENT_MAX : FAKE_AMOUNT_MAX)) continue;
+      const tier = { to: null, type, value: Math.round(value * 100) / 100 };
+      if (t.to === null || t.to === undefined || t.to === '') { if (!open) open = tier; continue; }
+      const to = Number(t.to); if (!Number.isFinite(to) || to <= 0 || to > FAKE_TO_MAX) continue;
+      tier.to = Math.round(to * 100) / 100; closed.push(tier);
+    }
+    closed.sort((a, b) => a.to - b.to);
+    const tiers = closed.filter((x, i) => i === 0 || x.to !== closed[i - 1].to).slice(0, FAKE_MAX - (open ? 1 : 0)).concat(open ? [open] : []);
+    return tiers.length ? { tiers } : null;
+  }
+  // شريحة سعر البيع ده (null: مالوش شريحة — أعلى من آخر «لحد» ومفيش «فيما فوق»)
+  function fakeTier(sale, rule) { const r = fakeRule(rule); const s = Number(sale); if (!r || !Number.isFinite(s) || s <= 0) return null; return r.tiers.find((t) => t.to === null || s <= t.to) || null; }
+  // «قبل الخصم» بالقاعدة: الرقم بيتزود زي ما هو، والنسبة لفوق لأقرب 10 — null لو السعر مالوش شريحة (الحساب القديم هو اللي يمشي)
+  function fakeRegular(sale, rule) { const t = fakeTier(sale, rule); if (!t) return null; const s = Number(sale); return t.type === 'percent' ? ceil10(s * (1 + t.value / 100)) : Math.round((s + t.value) * 100) / 100; }
+  // للعرض: [{ from, to, type, value }] — «من» محسوبة (الأولى 0، وبعدها آخر «لحد» + 1)
+  function fakeLines(rule) { const r = fakeRule(rule); if (!r) return []; let from = 0; return r.tiers.map((t) => { const line = { from, to: t.to, type: t.type, value: t.value }; if (t.to !== null) from = Math.floor(t.to) + 1; return line; }); }
+  // vendor: سعر المبتكر · rate: نسبة إبتكر % (0 لعمولة ثابتة بس) · fee: الرسوم الثابتة · markup: الزيادة % (من غيرها عشوائي) ·
+  // fake: قاعدة الخصم الوهمي (الشرايح — من غيرها أو لسعر مالوش شريحة: الزيادة %) → null لو الأرقام مش صالحة
+  function priceFromVendor(vendor, opts) {
+    const o = opts || {}; const v = Number(vendor), r = o.rate == null ? 0 : Number(o.rate), f = o.fee == null ? 0 : Number(o.fee);
+    if (!Number.isFinite(v) || v <= 0 || !Number.isFinite(r) || r < 0 || r >= 100 || !Number.isFinite(f) || f < 0) return null;
+    const m = o.markup == null ? randomMarkup(o.rng) : Number(o.markup);
+    const sale = ceil10((v + f) / (1 - r / 100));
+    const tiered = o.fake ? fakeRegular(sale, o.fake) : null;
+    const regular = tiered != null ? tiered : ceil10(sale * (1 + m / 100));
+    const out = { sale, regular, markup: m, vendorNet: Math.round((sale * (1 - r / 100) - f) * 100) / 100 };
+    if (tiered != null) out.tiered = true; // «قبل الخصم» جه من شريحة مش من الزيادة %
+    return out;
+  }
+  // ---------- تقارير المنتجات (قرار 20 في خطة المرحلة 5) ----------
+  // records (IBProducts.list) → اللي نفد مخزونه: مش «حسب الطلب»، وحالته على ووكومرس outofstock أو مخزونه المتتبع 0 أو أقل؛ الأكتر مبيعًا الأول.
+  // التركيبات مش في المرآة: منتج Variable بيبان هنا لما ووكومرس يعلّمه نفد (كل تركيباته خلصت).
+  // B3 (the owner, 11 Nov — «الاقسام … الرئيسي … - و -- و ---»): the site's categories ({ id, name, parentId, path }) as filter options —
+  // a main category, then its subs by name (depth-first), each [path, name, depth]; a category whose parent is not in the list stands as a
+  // main one; a loop of parents comes out once each
+  function catOptions(cats) {
+    const list = Array.isArray(cats) ? cats.filter((c) => c && c.id != null) : [];
+    const ids = new Set(list.map((c) => String(c.id))); const byName = (a, b) => String(a.name).localeCompare(String(b.name));
+    const kids = new Map(); list.forEach((c) => { const p = c.parentId != null && String(c.parentId) !== '0' && ids.has(String(c.parentId)) ? String(c.parentId) : ''; if (!kids.has(p)) kids.set(p, []); kids.get(p).push(c); });
+    const out = []; const seen = new Set();
+    const walk = (pid, d) => (kids.get(pid) || []).slice().sort(byName).forEach((c) => { if (seen.has(String(c.id))) return; seen.add(String(c.id)); out.push([c.path || c.name, c.name, d]); walk(String(c.id), d + 1); });
+    walk('', 0);
+    list.slice().sort(byName).forEach((c) => { if (seen.has(String(c.id))) return; seen.add(String(c.id)); out.push([c.path || c.name, c.name, 0]); walk(String(c.id), 1); });
+    return out;
+  }
+  function outOfStock(records) {
+    return (records || []).filter((p) => !p.onDemand && (p.stockStatus === 'outofstock' || (p.manageStock && p.stock != null && p.stock <= 0)))
+      .sort((a, b) => (b.sales || 0) - (a.sales || 0));
+  }
+  // cats: [{ name, sold, revenue, orders, products }] → الترتيب بالقطع ثم الإيراد، والأقسام اللي ليها نفس الاسم (تحت أكتر من رئيسي) بتتجمع؛
+  // share = نصيب القسم من مجموع القطع (رقم بين 0 و1، 3 خانات).
+  function categoriesRank(cats, n) {
+    const m = new Map(); const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    (cats || []).forEach((c) => { const name = clean(c.name) || '—'; const k = name.toLowerCase(); const x = m.get(k) || { name, sold: 0, revenue: 0, products: 0, orders: 0 };
+      x.sold += Number(c.sold) || 0; x.revenue += Number(c.revenue) || 0; x.products += Number(c.products) || 0; x.orders += Number(c.orders) || 0; m.set(k, x); });
+    const all = [...m.values()].sort((a, b) => b.sold - a.sold || b.revenue - a.revenue || a.name.localeCompare(b.name));
+    const tot = all.reduce((s, x) => s + x.sold, 0);
+    return (n ? all.slice(0, n) : all).map((x, i) => Object.assign({ rank: i + 1, share: tot ? Math.round(x.sold / tot * 1000) / 1000 : 0 }, x, { revenue: Math.round(x.revenue * 100) / 100 }));
+  }
+  // ---------- استوديو المنتجات (المرحلة 5.2 — خطة 2026-10-28-phase-5-2-studio.md) ----------
+  // الـ SKU (صاحب المشروع 28 أكتوبر، قرار 2): IBT + أول حرفين من اسم البراند بالإنجليزي + كود اللون (حرفين) + المسلسل (4 خانات على
+  // الأقل، مسلسل واحد للموقع أوله 0999)؛ المنتج الـ Variable من غير لون، والتركيبة بلونها و«-المقاس» (أرقامه بس) لو فيه مقاسات.
+  const toAsciiDigits = (s) => String(s == null ? '' : s).replace(/[٠-٩]/g, (c) => String(c.charCodeAt(0) - 0x660)).replace(/[۰-۹]/g, (c) => String(c.charCodeAt(0) - 0x6f0));
+  const brandCode = (name) => { const l = String(name || '').toUpperCase().replace(/[^A-Z]/g, ''); return l.length >= 2 ? l.slice(0, 2) : null; };
+  const serialText = (n) => (Number.isInteger(n) && n >= 0 ? String(n).padStart(4, '0') : null);
+  const sizeDigits = (s) => sizeCode(toAsciiDigits(s));
+  // { brand, color (كود حرفين أو null), serial, size } → { sku, missing: [] } — missing = اللي ناقص عشان الـ SKU يكمل
+  function studioSku(o) {
+    const b = brandCode(o && o.brand); const c = o && o.color ? String(o.color) : ''; const n = serialText(o && o.serial); const sz = o && o.size ? sizeDigits(o.size) : '';
+    const missing = [!b && 'البراند', c && !/^[A-Z]{2}$/.test(c) && 'كود اللون', n == null && 'المسلسل'].filter(Boolean);
+    return { sku: 'IBT' + (b || '??') + (/^[A-Z]{2}$/.test(c) ? c : '') + (n == null ? '####' : n) + (sz ? '-' + sz : ''), missing };
+  }
+  // كود لون جديد مقترح: أول حرفين، وإلا الحرف الأول + حرف تاني من الاسم، وإلا أول حرفين فاضيين
+  function suggestColorCode(name, taken) {
+    const t = new Set((taken || []).map(String)); const w = String(name || '').toUpperCase().replace(/[^A-Z]/g, '');
+    const cands = []; if (w.length >= 2) cands.push(w.slice(0, 2)); for (let i = 1; i < w.length; i++) cands.push(w[0] + w[i]);
+    for (const x of cands) if (!t.has(x)) return x;
+    const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'; for (const x of A) for (const y of A) if (!t.has(x + y)) return x + y;
+    return '';
+  }
+  // الشيت: CSV (فاصلة / ; / tab، علامات تنصيص) → صفوف
+  function parseCsv(text) {
+    const src = String(text || '').replace(/^﻿/, ''); const first = src.split(/\r?\n/, 1)[0] || '';
+    const d = [',', ';', '\t'].map((x) => [x, first.split(x).length]).sort((a, b) => b[1] - a[1])[0][0];
+    const rows = []; let row = []; let cell = ''; let q = false;
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (q) { if (ch === '"') { if (src[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch; continue; }
+      if (ch === '"') q = true; else if (ch === d) { row.push(cell); cell = ''; } else if (ch === '\n' || ch === '\r') { if (ch === '\r' && src[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; } else cell += ch;
+    }
+    if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+    return rows.filter((r) => r.some((c) => String(c).trim() !== ''));
+  }
+  // XLSX → صفوف أول شيت (من غير مكتبات: zip + DecompressionStream('deflate-raw') + XML بسيط). async.
+  const xmlText = (s) => s.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&amp;/g, '&');
+  // binary: the files as bytes (the pictures inside a workbook), else as text
+  async function unzipText(bytes, want, binary) {
+    const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes); const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    let e = -1; for (let i = b.length - 22; i >= Math.max(0, b.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break; }
+    if (e < 0) throw new Error('not a zip');
+    const n = dv.getUint16(e + 10, true); let p = dv.getUint32(e + 16, true); const out = {};
+    for (let k = 0; k < n; k++) {
+      if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('bad zip');
+      const method = dv.getUint16(p + 10, true), size = dv.getUint32(p + 20, true), nl = dv.getUint16(p + 28, true), xl = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), off = dv.getUint32(p + 42, true);
+      const name = new TextDecoder().decode(b.subarray(p + 46, p + 46 + nl)); p += 46 + nl + xl + cl;
+      if (!want(name)) continue;
+      const start = off + 30 + dv.getUint16(off + 26, true) + dv.getUint16(off + 28, true); const raw = b.subarray(start, start + size);
+      let data = raw;
+      if (method === 8) data = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+      else if (method !== 0) throw new Error('zip method ' + method);
+      out[name] = binary && binary(name) ? data.slice() : new TextDecoder().decode(data);
+    }
+    return out;
+  }
+  const colIndex = (ref) => { const m = /^([A-Z]+)/.exec(ref || ''); if (!m) return -1; let n = 0; for (const ch of m[1]) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; };
+  const firstSheet = (files) => Object.keys(files).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0]))[0];
+  // the rows carry their sheet lines as `rows.lines` (1-based, the same length) — a picture inside the sheet is found by its line
+  async function parseXlsx(bytes) {
+    const files = await unzipText(bytes, (n) => n === 'xl/sharedStrings.xml' || /^xl\/worksheets\/sheet\d+\.xml$/.test(n));
+    const sheet = firstSheet(files);
+    if (!sheet) throw new Error('no sheet');
+    const shared = [...(files['xl/sharedStrings.xml'] || '').matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => [...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((t) => xmlText(t[1])).join(''));
+    const rows = []; const lines = []; let at = 0;
+    for (const r of files[sheet].matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>/g)) {
+      const row = []; const rn = Number((/\br="(\d+)"/.exec(r[1]) || [])[1]); at = rn >= 1 ? rn : at + 1;
+      for (const c of r[2].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+        const attrs = c[1]; const body = c[2] || ''; const i = colIndex((/\br="([A-Z]+\d+)"/.exec(attrs) || [])[1]); const t = (/\bt="(\w+)"/.exec(attrs) || [])[1];
+        const v = (/<v>([\s\S]*?)<\/v>/.exec(body) || [])[1];
+        const val = t === 's' ? shared[Number(v)] || '' : t === 'inlineStr' ? xmlText((/<is>([\s\S]*?)<\/is>/.exec(body) || [])[1] || '') : v == null ? '' : xmlText(v);
+        row[i < 0 ? row.length : i] = val;
+      }
+      const cells = Array.from(row, (x) => (x == null ? '' : x));
+      if (cells.some((c) => String(c).trim() !== '')) { rows.push(cells); lines.push(at); }
+    }
+    Object.defineProperty(rows, 'lines', { value: lines, enumerable: false }); // beside the rows, not one of them
+    return rows;
+  }
+  /**
+   * The pictures inside a workbook's first sheet, by the line they sit on (comments decision 40 — «بناءا علي الصور اللي جوة
+   * الشيت»): the drawings anchored to a cell (the usual «صورة فوق الخلايا» — and what our own sheets write) and Excel's
+   * «Place in cell» pictures (richData). → [{ line (1-based), col (0-based), name, ext, bytes }] in the sheet's order; PNG / JPEG /
+   * GIF / WebP / BMP only, 300 at most.
+   */
+  async function xlsxPhotos(bytes) {
+    const isPic = (n) => /^xl\/media\/[^/]+\.(png|jpe?g|gif|webp|bmp)$/i.test(n);
+    let files;
+    try { files = await unzipText(bytes, (n) => /^xl\/worksheets\/(sheet\d+\.xml|_rels\/sheet\d+\.xml\.rels)$/.test(n) || /^xl\/drawings\/(drawing\d+\.xml|_rels\/drawing\d+\.xml\.rels)$/.test(n)
+      || /^xl\/(metadata\.xml|richData\/(rdrichvalue\.xml|richValueRel\.xml|_rels\/richValueRel\.xml\.rels))$/.test(n) || isPic(n), isPic); } catch (e) { return []; }
+    const sheet = firstSheet(files); if (!sheet) return [];
+    const relsOf = (xml) => { const m = {}; for (const r of String(xml || '').matchAll(/<Relationship\b([^>]*)\/?>/g)) { const id = (/\bId="([^"]+)"/.exec(r[1]) || [])[1]; const t = (/\bTarget="([^"]+)"/.exec(r[1]) || [])[1]; if (id && t) m[id] = t; } return m; };
+    const resolve = (base, target) => { if (target.startsWith('/')) return target.slice(1); const parts = base.split('/').slice(0, -1); target.split('/').forEach((x) => { if (x === '..') parts.pop(); else if (x !== '.') parts.push(x); }); return parts.join('/'); };
+    const out = []; const put = (line, col, name) => { const b = files[name]; if (!(b instanceof Uint8Array) || !b.length || b.length > 8 * 1024 * 1024 || !(line >= 1)) return; out.push({ line, col: col >= 0 ? col : 0, name, ext: name.split('.').pop().toLowerCase().replace('jpg', 'jpeg'), bytes: b }); };
+    // 1) the drawings: an anchor's top-left cell is the picture's cell
+    const sheetRels = relsOf(files[sheet.replace('worksheets/', 'worksheets/_rels/') + '.rels']);
+    for (const m of files[sheet].matchAll(/<drawing\b[^>]*\br:id="([^"]+)"/g)) {
+      const dr = sheetRels[m[1]] ? resolve(sheet, sheetRels[m[1]]) : ''; const xml = files[dr]; if (typeof xml !== 'string') continue;
+      const dRels = relsOf(files[dr.replace('drawings/', 'drawings/_rels/') + '.rels']);
+      for (const a of xml.matchAll(/<(?:\w+:)?(oneCellAnchor|twoCellAnchor)\b[\s\S]*?<\/(?:\w+:)?\1>/g)) {
+        const from = (/<(?:\w+:)?from>([\s\S]*?)<\/(?:\w+:)?from>/.exec(a[0]) || [])[1] || '';
+        const row = Number((/<(?:\w+:)?row>(\d+)<\//.exec(from) || [])[1]); const col = Number((/<(?:\w+:)?col>(\d+)<\//.exec(from) || [])[1]);
+        const rid = (/<(?:\w+:)?blip\b[^>]*\b(?:r:)?embed="([^"]+)"/.exec(a[0]) || [])[1];
+        if (rid && dRels[rid] && Number.isFinite(row)) put(row + 1, col, resolve(dr, dRels[rid]));
+      }
+    }
+    // 2) «Place in cell»: the cell's vm → the value's metadata → the rich value → its relation → the picture
+    const meta = files['xl/metadata.xml']; const rv = files['xl/richData/rdrichvalue.xml']; const rvRel = files['xl/richData/richValueRel.xml'];
+    if (typeof meta === 'string' && typeof rv === 'string' && typeof rvRel === 'string') {
+      const vmeta = (/<valueMetadata\b[^>]*>([\s\S]*?)<\/valueMetadata>/.exec(meta) || [])[1] || '';
+      const bks = [...vmeta.matchAll(/<bk>([\s\S]*?)<\/bk>/g)].map((b) => Number((/\bv="(\d+)"/.exec(b[1]) || [])[1]));
+      const rvs = [...rv.matchAll(/<rv\b[^>]*>([\s\S]*?)<\/rv>/g)].map((x) => Number((/<v>(\d+)<\/v>/.exec(x[1]) || [])[1]));
+      const rels = [...rvRel.matchAll(/<rel\b[^>]*\br:id="([^"]+)"/g)].map((x) => x[1]); const relMap = relsOf(files['xl/richData/_rels/richValueRel.xml.rels']);
+      for (const c of files[sheet].matchAll(/<c\b([^>]*\bvm="(\d+)"[^>]*)>/g)) {
+        const ref = (/\br="([A-Z]+)(\d+)"/.exec(c[1]) || []); const k = Number(c[2]); const vi = bks[k - 1]; const ri = Number.isFinite(vi) ? rvs[vi] : NaN; const rid = Number.isFinite(ri) ? rels[ri] : null;
+        if (ref[2] && rid && relMap[rid]) put(Number(ref[2]), colIndex(ref[1] + '1'), resolve('xl/richData/richValueRel.xml', relMap[rid]));
+      }
+    }
+    return out.sort((a, b) => a.line - b.line || a.col - b.col).slice(0, 300);
+  }
+  // ربط الأعمدة بالاسم (عربي أو إنجليزي) → { field: index }
+  const STUDIO_FIELDS = {
+    nameEn: ['name en', 'product name en', 'english name', 'name', 'product name', 'الاسم en', 'الاسم بالانجليزي', 'الاسم انجليزي'],
+    nameAr: ['name ar', 'product name ar', 'arabic name', 'الاسم ar', 'الاسم بالعربي', 'الاسم عربي', 'اسم المنتج'],
+    vendorPrice: ['vendor price', 'maker price', 'price', 'سعر المبتكر', 'سعر المورد', 'السعر'],
+    colors: ['color', 'colors', 'colour', 'product colors', 'اللون', 'الالوان', 'الوان'],
+    sizes: ['size', 'sizes', 'dimensions', 'المقاس', 'المقاسات'],
+    material: ['material', 'product material', 'الخامة', 'الخامه'],
+    style: ['style', 'product style', 'الستايل', 'الاستايل'],
+    weight: ['weight', 'product weight', 'product weight per kg', 'weight kg', 'الوزن', 'الوزن بالكيلو'],
+    stock: ['stock', 'quantity', 'qty', 'المخزون', 'الكمية', 'الكميه'],
+    shortDesc: ['short description', 'short description en', 'description', 'description en', 'الوصف القصير', 'الوصف القصير en', 'الوصف'],
+    shortDescAr: ['short description ar', 'description ar', 'arabic description', 'الوصف القصير ar', 'الوصف القصير بالعربي', 'الوصف بالعربي'],
+    // the site category as a path («Decor > WALL MACRAME > Macrame Balls») — the last name is matched to the site's tree (catFromPath)
+    category: ['product category', 'category', 'categories', 'القسم', 'التصنيف', 'الفئة'],
+    // decision 16 (the owner, 31 Oct — his WP All Import template): a shared id groups the rows of one Variable product
+    group: ['parentsku', 'parent sku', 'parent', 'unique id', 'uniqueid', 'group', 'group id', 'product id', 'كود المنتج', 'معرف المنتج', 'معرّف المنتج', 'المجموعة'],
+  };
+  const normHead = (h) => toAsciiDigits(h).toLowerCase().replace(/[()\[\]_\-:]/g, ' ').replace(/[أإآ]/g, 'ا').replace(/ـ/g, '').replace(/\s+/g, ' ').trim();
+  function mapColumns(headers) {
+    const H = (headers || []).map(normHead); const out = {}; const used = new Set();
+    for (const [field, names] of Object.entries(STUDIO_FIELDS)) {
+      const i = names.map((n) => H.findIndex((x, k) => !used.has(k) && x === normHead(n))).find((k) => k >= 0);
+      if (i != null && i >= 0) { out[field] = i; used.add(i); }
+    }
+    return out;
+  }
+  const splitList = (v) => String(v || '').split(/[,،/|\n]+/).map((x) => x.trim()).filter(Boolean);
+  // «صور بس» (phase 5.4 decision 10 — plan 5.2 decision 17, the owner 1 Nov): the product's data in the photo's file name, e.g.
+  // "Boho Cushion - مخدة بوهيمي - بيج - 45×45 - قطن - 350 (2).jpg" — the parts in any order, split on « - » / | / , / ، / ; / _;
+  // a part is a price (a bare number, optionally ج.م / EGP), a size (n×n, a unit, S/M/L…), a weight (kg / جم), a color (one of
+  // opts.colors — the table's names, EN or AR), a material (the crafts lexicon), a labeled value (price: / سعر: …), else the first
+  // Latin part is the English name, the first Arabic one the Arabic name, and the rest waits in `unknown`. A copy counter
+  // (" (2)", "_2", "-2", " copy") is dropped; `key` groups the photos of one product (the same names).
+  const PHOTO_LABELS = { name: 'nameEn', en: 'nameEn', english: 'nameEn', 'اسم': 'nameEn', ar: 'nameAr', arabic: 'nameAr', 'عربي': 'nameAr', 'الاسم بالعربي': 'nameAr', price: 'vendorPrice', 'سعر': 'vendorPrice', 'السعر': 'vendorPrice',
+    color: 'colors', colour: 'colors', 'لون': 'colors', 'اللون': 'colors', size: 'sizes', 'مقاس': 'sizes', 'المقاس': 'sizes', material: 'material', 'خامة': 'material', 'الخامة': 'material', style: 'style', 'ستايل': 'style', 'الستايل': 'style',
+    weight: 'weight', 'وزن': 'weight', 'الوزن': 'weight', stock: 'stock', qty: 'stock', 'مخزون': 'stock', 'عدد': 'stock' };
+  const MATERIALS = ['cotton', 'wool', 'linen', 'wood', 'bamboo', 'ceramic', 'clay', 'pottery', 'glass', 'leather', 'metal', 'brass', 'copper', 'silver', 'gold', 'resin', 'macrame', 'crochet', 'rattan', 'jute', 'silk', 'velvet', 'paper', 'concrete', 'marble', 'stone', 'acrylic', 'polyester', 'beads', 'epoxy', 'felt', 'canvas', 'plastic', 'steel', 'iron', 'wicker', 'porcelain', 'yarn',
+    'قطن', 'صوف', 'كتان', 'خشب', 'بامبو', 'خيزران', 'سيراميك', 'طين', 'فخار', 'زجاج', 'إزاز', 'ازاز', 'جلد', 'معدن', 'نحاس', 'فضة', 'دهب', 'ذهب', 'ريزن', 'مكرمية', 'مكرميه', 'كروشيه', 'راتان', 'جوت', 'حرير', 'قطيفة', 'ورق', 'خرسانة', 'رخام', 'حجر', 'أكريليك', 'اكريليك', 'بوليستر', 'خرز', 'إيبوكسي', 'ايبوكسي', 'لباد', 'كانفس', 'بلاستيك', 'استانلس', 'حديد', 'بورسلين', 'خيط', 'خيوط'];
+  const SIZE_WORDS = ['xs', 's', 'm', 'l', 'xl', 'xxl', 'xxxl', 'small', 'medium', 'large', 'صغير', 'وسط', 'متوسط', 'كبير'];
+  function photoName(file, opts) {
+    const colorNames = ((opts && opts.colors) || []).map((n) => String(n || '').trim().toLowerCase()).filter(Boolean);
+    let base = String(file || '').replace(/\.[a-z0-9]{2,5}$/i, '').trim();
+    base = base.replace(/\s*\(\d+\)$/, '').replace(/[\s_-]+copy(\s*\d+)?$/i, '').replace(/(?<=[^\d\s_-])\s*[-_ ]\s*\d{1,2}$/, '').trim(); // a trailing 1–2 digit number is a copy counter
+    const out = { nameEn: '', nameAr: '', vendorPrice: null, colors: [], sizes: [], material: '', style: '', weight: '', stock: null, unknown: [] };
+    const parts = base.split(/\s+[-–—|]\s+|[|,،;_]+/).map((x) => x.trim()).filter(Boolean);
+    const num = (v) => { const n = Number(toAsciiDigits(v).replace(/[^\d.]/g, '')); return Number.isFinite(n) && n > 0 ? n : null; };
+    const isSize = (t) => /^\d+(\.\d+)?\s*[x×*]\s*\d+(\.\d+)?(\s*[x×*]\s*\d+(\.\d+)?)?\s*(cm|سم|mm|مم|m|م|inch|in|بوصة)?$/i.test(t) || /^\d+(\.\d+)?\s*(cm|سم|mm|مم|inch|in|بوصة|ml|مل|l|لتر)$/i.test(t) || SIZE_WORDS.includes(t.toLowerCase());
+    const isWeight = (t) => /^\d+(\.\d+)?\s*(kg|كجم|كيلو|g|gm|جم|جرام)$/i.test(t);
+    const weightKg = (t) => { const n = num(t); return n == null ? '' : String(/(kg|كجم|كيلو)$/i.test(t) ? n : Math.round(n) / 1000); };
+    // a material part is a lexicon word alone, or with modifiers only (natural cotton, 100% wool, خشب طبيعي) — «مج سيراميك» is a name
+    const MODS = ['natural', 'pure', 'solid', 'real', 'genuine', '100%', '100', 'طبيعي', 'طبيعى', 'صافي', 'صافى', 'خام', 'أصلي', 'اصلي'];
+    const isMaterial = (t) => { const ws = t.toLowerCase().split(/\s+/); return ws.length <= 3 && ws.some((w) => MATERIALS.includes(w)) && ws.every((w) => MATERIALS.includes(w) || MODS.includes(w)); };
+    const inline = (t) => {
+      let text = toAsciiDigits(t);
+      const price = /(?:^|\s)(?:ب|بـ|سعر|السعر|price|بسعر)?\s*(\d+(?:[.,]\d+)?)\s*(ج(?:\.?\s?م\.?)?|جنيه|egp|le)(?=\s|$)/i.exec(text);
+      if (price && out.vendorPrice == null) { out.vendorPrice = num(price[1]); text = text.replace(price[0], ' '); }
+      const size = /(?:^|\s)(?:مقاس|مقاسها|المقاس|size)?\s*(\d+(?:\.\d+)?\s*[x×*]\s*\d+(?:\.\d+)?(?:\s*[x×*]\s*\d+(?:\.\d+)?)?\s*(?:cm|سم)?)(?=\s|$)/i.exec(text);
+      if (size) { out.sizes.push(size[1].replace(/\s*[x*]\s*/gi, '×').trim()); text = text.replace(size[0], ' '); }
+      const words = text.split(/\s+/); const mat = words.find((w) => MATERIALS.includes(w.toLowerCase().replace(/^(ال|و)/, '')) || MATERIALS.includes(w.toLowerCase()));
+      if (mat && !out.material) out.material = mat.replace(/^(ال)/, '');
+      return { text: text.replace(/\s+/g, ' ').replace(/[\s,،;:-]+$/, '').trim() };
+    };
+    const put = (field, v) => {
+      if (field === 'colors' || field === 'sizes') { out[field] = out[field].concat(String(v).split(/\s*[/+&]\s*|\s+و\s+/).map((x) => x.trim()).filter(Boolean)); return; }
+      if (field === 'vendorPrice') { out.vendorPrice = num(v); return; }
+      if (field === 'stock') { const n = parseInt(toAsciiDigits(v), 10); out.stock = Number.isFinite(n) && n >= 0 ? n : null; return; }
+      if (field === 'weight') { out.weight = isWeight(v) ? weightKg(v) : String(num(v) == null ? '' : num(v)); return; }
+      if (!out[field]) out[field] = String(v).trim(); else out.unknown.push(String(v).trim());
+    };
+    for (const t of parts) {
+      const lab = /^([^:=]{1,20})\s*[:=]\s*(.+)$/.exec(t);
+      if (lab && PHOTO_LABELS[lab[1].trim().toLowerCase()]) { put(PHOTO_LABELS[lab[1].trim().toLowerCase()], lab[2]); continue; }
+      const digits = toAsciiDigits(t);
+      if (/^\d+([.,]\d+)?\s*(ج\.?\s?م|جنيه|egp|le)?$/i.test(digits) && out.vendorPrice == null) { out.vendorPrice = num(digits); continue; }
+      if (isSize(digits)) { out.sizes.push(/\d\s*[x*]\s*\d/i.test(digits) ? digits.replace(/\s*[x*]\s*/gi, '×') : digits); continue; }
+      if (isWeight(digits)) { out.weight = weightKg(digits); continue; }
+      const cs = t.split(/\s*[/+&]\s*|\s+و\s+/).map((x) => x.trim()).filter(Boolean);
+      if (cs.length && cs.every((x) => colorNames.includes(x.toLowerCase()))) { out.colors = out.colors.concat(cs); continue; }
+      if (isMaterial(t)) { if (!out.material) out.material = t; else out.unknown.push(t); continue; }
+      // a name written as one phrase (the owner, 1 Nov: «شنطة جلد عليا رسمة زهور ب 1500ج مقاسها 40x50»): the price, the size and a
+      // material word are read out of it — the price and the size leave the name, the material word stays in it
+      const name = inline(t);
+      if (/[A-Za-z]/.test(name.text) && !/[\u0600-\u06FF]/.test(name.text)) { if (!out.nameEn) out.nameEn = name.text; else out.unknown.push(name.text); continue; }
+      if (/[\u0600-\u06FF]/.test(name.text)) { if (!out.nameAr) out.nameAr = name.text; else out.unknown.push(name.text); continue; }
+      if (name.text) out.unknown.push(name.text);
+    }
+    out.key = (out.nameEn || out.nameAr) ? (out.nameEn.toLowerCase() + '|' + out.nameAr) : base.toLowerCase();
+    return out;
+  }
+  const toPrice = (v) => { const n = Number(toAsciiDigits(v).replace(/[^\d.]/g, '')); return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null; };
+  // صفوف الشيت (أول صف = العناوين) + الربط → منتجات الدفعة.
+  // قرار 16 (صاحب المشروع 31 أكتوبر — شكل شيته في WP All Import): لو الدفعة Variable وفي عمود «unique id» (Parent SKU)، الصفوف اللي
+  // ليها نفس القيمة = منتج واحد: بيانات المنتج (الاسم والخامة والستايل والوصف والقسم) من أول صف، وكل صف فيه لون أو مقاس —
+  // الأول كمان — تركيبة بلونها ومقاسها وسعر مبتكرها ومخزونها زي ما هي (`variationRows`، من غير توليد ألوان × مقاسات؛ في شيت
+  // صاحب المشروع كل صف بيكرر بيانات المنتج ويغيّر اللون). مجموعة بصف واحد، أو صف من غير معرّف = منتج زي العادي.
+  function rowsToItems(rows, map, opts) {
+    const get = (r, f) => (map[f] == null ? '' : String(r[map[f]] == null ? '' : r[map[f]]).trim());
+    const stockOf = (r) => { const n = parseInt(toAsciiDigits(get(r, 'stock')), 10); return Number.isFinite(n) && n >= 0 ? n : null; };
+    const flat = (rows || []).slice(1).map((r, i) => ({ row: i + 2, group: get(r, 'group'), nameEn: get(r, 'nameEn'), nameAr: get(r, 'nameAr'), vendorPrice: toPrice(get(r, 'vendorPrice')), colors: splitList(get(r, 'colors')), sizes: splitList(get(r, 'sizes')),
+      material: get(r, 'material'), style: get(r, 'style'), weight: toAsciiDigits(get(r, 'weight')).replace(/[^\d.]/g, ''), stock: stockOf(r), shortDesc: get(r, 'shortDesc'), shortDescAr: get(r, 'shortDescAr'), category: get(r, 'category') }));
+    const grouped = opts && opts.type === 'Variable' && map.group != null;
+    if (!grouped) return flat.map(({ group, ...it }) => it).filter((it) => it.nameEn || it.nameAr || it.vendorPrice);
+    const out = []; const byGroup = new Map();
+    const asVariation = (it) => ({ row: it.row, color: it.colors[0] || '', size: it.sizes[0] || '', vendorPrice: it.vendorPrice, stock: it.stock });
+    for (const x of flat) {
+      const { group, ...it } = x;
+      if (!group) { if (it.nameEn || it.nameAr || it.vendorPrice) out.push(it); continue; }
+      const head = byGroup.get(group);
+      if (!head) { if (it.nameEn || it.nameAr || it.vendorPrice || it.colors.length || it.sizes.length) { it.variationRows = it.colors.length || it.sizes.length ? [asVariation(it)] : []; it.rows = 1; byGroup.set(group, it); out.push(it); } continue; }
+      head.rows++;
+      for (const k of ['nameEn', 'nameAr', 'material', 'style', 'weight', 'shortDesc', 'shortDescAr', 'category']) if (!head[k] && it[k]) head[k] = it[k]; // the parent row left it empty
+      if (!it.colors.length && !it.sizes.length) continue; // a row of the group with no color and no size adds nothing
+      head.variationRows.push(asVariation(it));
+      if (head.vendorPrice == null && it.vendorPrice != null) head.vendorPrice = it.vendorPrice;
+    }
+    for (const it of out) {
+      if (!it.variationRows) continue;
+      const one = it.rows === 1; delete it.rows;
+      if (one || !it.variationRows.length) { delete it.variationRows; continue; } // one row: colors × sizes as usual
+      for (const v of it.variationRows) if (v.vendorPrice == null) v.vendorPrice = it.vendorPrice;
+      it.colors = [...new Set(it.variationRows.map((v) => v.color).filter(Boolean))];
+      it.sizes = [...new Set(it.variationRows.map((v) => v.size).filter(Boolean))];
+    }
+    return out;
+  }
+  // the category of a sheet row: a path («Decor > WALL MACRAME > Macrame Balls», or with / or ›) → the id of the site category whose
+  // name equals the last part (case-insensitive; the parent's name breaks a tie), else null
+  function catFromPath(tree, path) {
+    const parts = String(path == null ? '' : path).split(/[>›\/»]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+    if (!parts.length || !tree || !tree.byId) return null;
+    const leaf = parts[parts.length - 1]; const parent = parts.length > 1 ? parts[parts.length - 2] : null;
+    const hits = [...tree.byId.values()].filter((c) => String(c.name).trim().toLowerCase() === leaf);
+    if (!hits.length) return null;
+    if (hits.length > 1 && parent) { const h = hits.find((c) => { const p = c.parentId != null ? tree.byId.get(c.parentId) : null; return p && String(p.name).trim().toLowerCase() === parent; }); if (h) return h.id; }
+    return hits[0].id;
+  }
+  // اللي ناقص في منتج الدفعة (الرسائل بالعربي زي الـ prototype). الاسم بالعربي إجباري (قرار 15، صاحب المشروع 29 أكتوبر) —
+  // «الاستلام» بيعدّيه ({ ar: false }) عشان يتكتب في «البيانات و SKU» لو الشيت مافيهوش. و«صور بس» ({ en: false }، صاحب المشروع
+  // 1 نوفمبر): اسم واحد كفاية في اسم الملف (عربي أو إنجليزي) — الإنجليزي الناقص بيتملا بالـ AI أو بالإيد في «البيانات و SKU»
+  // { color: true } («البيانات و SKU», the owner 1 Nov: «اللون مبيتحطش في الداتا»): a Simple product needs its one color (the SKU's
+  // code) — read from the photo by «املا الناقص بالـ AI» or picked by hand; a Variable one is covered by «المتغيرات»
+  function itemIssues(it, type, opts) {
+    const ar = !(opts && opts.ar === false);
+    const hasAr = !!String(it.nameAr == null ? '' : it.nameAr).trim();
+    const enOk = it.nameEn || (opts && opts.en === false && hasAr);
+    return [!enOk && 'الاسم (EN)', ar && !hasAr && 'الاسم (AR)', !it.vendorPrice && 'سعر المبتكر',
+      type === 'Variable' && !((it.colors || []).length || (it.sizes || []).length) && 'المتغيرات',
+      opts && opts.color && type !== 'Variable' && !(it.colors || []).length && 'اللون'].filter(Boolean);
+  }
+  // أقسام الاستوديو (قرار 14، صاحب المشروع 29 أكتوبر): شجرة بـ +/− زي شجرة العمولة. [{ id, name, parentId }] → { byId, kids, roots }
+  // (kids: id الأب أو 0 → الفروع بالاسم؛ أب مش موجود = رئيسي؛ لفّة في الداتا ماتظهرش ومابتوقفش حاجة)
+  function catTree(cats) {
+    const list = (cats || []).filter((c) => c && Number.isInteger(c.id)); const byId = new Map(list.map((c) => [c.id, c])); const kids = new Map();
+    for (const c of list) { const p = c.parentId != null && c.parentId !== c.id && byId.has(c.parentId) ? c.parentId : 0; if (!kids.has(p)) kids.set(p, []); kids.get(p).push(c); }
+    for (const l of kids.values()) l.sort((a, b) => String(a.name).localeCompare(String(b.name), 'en', { sensitivity: 'base' }) || a.id - b.id);
+    return { byId, kids, roots: kids.get(0) || [] };
+  }
+  // الأقسام اللي فوق القسم، الأقرب الأول
+  function catAncestors(tree, id) {
+    const out = []; const seen = new Set([id]);
+    for (let c = tree.byId.get(id); c && c.parentId != null && tree.byId.has(c.parentId) && !seen.has(c.parentId); c = tree.byId.get(c.parentId)) { seen.add(c.parentId); out.push(c.parentId); }
+    return out;
+  }
+  function catChosenBelow(tree, id, chosen) {
+    const stack = [...(tree.kids.get(id) || [])]; const seen = new Set();
+    while (stack.length) { const c = stack.pop(); if (seen.has(c.id)) continue; seen.add(c.id); if (chosen.has(c.id)) return true; stack.push(...(tree.kids.get(c.id) || [])); }
+    return false;
+  }
+  // اختيار قسم بيعلّم اللي فوقه لوحده (9,723 من 9,855 قسم فرعي على منتجات الموقع معاه أبوه) — `auto` = اللي اتعلّم لوحده؛ شيل قسم
+  // بيشيله هو، وبيشيل اللي اتعلّم لوحده فوقه لو مابقاش تحته حاجة متعلّمة. القسم الرئيسي يتشال لوحده عادي (الفرعي بيفضل).
+  // { chosen, auto } (Sets) → { chosen, auto } جديدة (المدخلات زي ما هي)
+  function catToggle(tree, sel, id, on) {
+    const chosen = new Set(sel && sel.chosen); const auto = new Set(sel && sel.auto);
+    if (on) { chosen.add(id); auto.delete(id); for (const a of catAncestors(tree, id)) if (!chosen.has(a)) { chosen.add(a); auto.add(a); } }
+    else { chosen.delete(id); auto.delete(id); for (const a of catAncestors(tree, id)) if (auto.has(a) && !catChosenBelow(tree, a, chosen)) { chosen.delete(a); auto.delete(a); } }
+    return { chosen, auto };
+  }
+  // البحث: الأقسام اللي اسمها فيه الكلام + اللي فوقها مفتوحة → { hits, show, open } (Sets)؛ كلام فاضي → null (الشجرة كلها)
+  function catSearch(tree, q) {
+    const qq = String(q == null ? '' : q).trim().toLowerCase(); if (!qq) return null;
+    const hits = new Set(), show = new Set(), open = new Set();
+    for (const c of tree.byId.values()) if (String(c.name).toLowerCase().includes(qq)) { hits.add(c.id); show.add(c.id); for (const a of catAncestors(tree, c.id)) { show.add(a); open.add(a); } }
+    return { hits, show, open };
+  }
+  // ---------- marketing «إنشاء» ----------
+  const VIDEO_MODELS = [
+    { id: 'seedance-2.5', name: 'Seedance 2.5', note: 'الأفضل · لحد 30 ث · صوت', max: 30, durations: [10, 15, 30], res: ['1080p', '720p'], def: true },
+    { id: 'seedance-2.0', name: 'Seedance 2.0', note: 'لو عايز 4K · لحد 15 ث', max: 15, durations: [10, 15], res: ['4K', '1080p'] },
+    { id: 'kling-2.5', name: 'Kling 2.5', note: 'أرخص · صامت · 5 أو 10 ث', max: 10, durations: [5, 10], res: ['1080p', '720p'] },
+    { id: 'minimax-h3', name: 'MiniMax H3', note: 'مسودات سريعة · لحد 15 ث', max: 15, durations: [10, 15], res: ['768p', '480p'] },
+  ];
+  const scenesTotal = (sc) => sc.reduce((s, x) => s + (Number(x.d) || 0), 0);
+  function scenesFit(sc, model, target) {
+    const m = VIDEO_MODELS.find((x) => x.id === model); const t = scenesTotal(sc);
+    if (m && t > m.max) return 'المشاهد ' + t + ' ث والموديل ده لحد ' + m.max + ' ث';
+    if (target && t !== target) return 'المشاهد ' + t + ' ث والمدة المختارة ' + target + ' ث';
+    return '';
+  }
+  function campaignPieces({ posts, videos, stories }) {
+    const out = [];
+    for (let i = 1; i <= (posts || 0); i++) out.push({ id: 'P' + i, kind: 'بوست', n: i });
+    for (let i = 1; i <= (videos || 0); i++) out.push({ id: 'V' + i, kind: 'فيديو', n: i });
+    for (let i = 1; i <= (stories || 0); i++) out.push({ id: 'S' + i, kind: 'ستوري', n: i });
+    return out;
+  }
+  // ---- real files for «حفظ على الجهاز» (owner 26 Oct): a store-only ZIP writer + a minimal XLSX with live formulas. Pure, no deps. ----
+  const enc = (x) => (typeof x === 'string' ? new TextEncoder().encode(x) : x);
+  let CRC = null;
+  function crc32(b) { if (!CRC) { CRC = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; CRC[n] = c >>> 0; } } let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+  // files: [{ name: 'a/b.txt', data: string|Uint8Array }] → Uint8Array (.zip, stored, UTF-8 names so Arabic folder names survive)
+  function zip(files, when) {
+    const d = when || new Date(); const time = ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)) & 0xffff; const date = (((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate()) & 0xffff;
+    const parts = []; const central = []; let off = 0;
+    const u16 = (v) => [v & 255, (v >>> 8) & 255], u32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+    for (const f of files) {
+      const name = enc(f.name), data = enc(f.data); const crc = crc32(data);
+      const head = [0x50, 0x4b, 3, 4, ...u16(20), ...u16(0x0800), ...u16(0), ...u16(time), ...u16(date), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(name.length), ...u16(0)];
+      parts.push(Uint8Array.from(head), name, data);
+      central.push(Uint8Array.from([0x50, 0x4b, 1, 2, ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(time), ...u16(date), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(name.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(off)]), name);
+      off += head.length + name.length + data.length;
+    }
+    const cdSize = central.reduce((a, b) => a + b.length, 0);
+    const end = Uint8Array.from([0x50, 0x4b, 5, 6, ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(cdSize), ...u32(off), ...u16(0)]);
+    const all = parts.concat(central, [end]); const out = new Uint8Array(all.reduce((a, b) => a + b.length, 0)); let p = 0; for (const b of all) { out.set(b, p); p += b.length; } return out;
+  }
+  const xesc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const colName = (i) => { let s = ''; i += 1; while (i) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
+  // rows: arrays of cells — string | number | { f: 'G{r}/(1-H{r})' } ({r} = this row number) → files of an .xlsx (RTL sheet)
+  function xlsxFiles(rows, sheetName) {
+    const NS = 'http://schemas.openxmlformats.org/'; const sd = rows.map((row, ri) => '<row r="' + (ri + 1) + '">' + row.map((c, ci) => { const ref = colName(ci) + (ri + 1); if (c == null || c === '') return ''; if (typeof c === 'number') return '<c r="' + ref + '"><v>' + c + '</v></c>'; if (typeof c === 'object' && c.f) return '<c r="' + ref + '"><f>' + xesc(c.f.replace(/\{r\}/g, ri + 1)) + '</f></c>'; return '<c r="' + ref + '" t="inlineStr"><is><t xml:space="preserve">' + xesc(c) + '</t></is></c>'; }).join('') + '</row>').join('');
+    return [
+      { name: '[Content_Types].xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="' + NS + 'package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>' },
+      { name: '_rels/.rels', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="' + NS + 'package/2006/relationships"><Relationship Id="rId1" Type="' + NS + 'officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+      { name: 'xl/workbook.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="' + NS + 'spreadsheetml/2006/main" xmlns:r="' + NS + 'officeDocument/2006/relationships"><sheets><sheet name="' + xesc((sheetName || 'Sheet1').slice(0, 31)) + '" sheetId="1" r:id="rId1"/></sheets><calcPr fullCalcOnLoad="1"/></workbook>' },
+      { name: 'xl/_rels/workbook.xml.rels', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="' + NS + 'package/2006/relationships"><Relationship Id="rId1" Type="' + NS + 'officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>' },
+      { name: 'xl/worksheets/sheet1.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="' + NS + 'spreadsheetml/2006/main"><sheetViews><sheetView rightToLeft="1" workbookViewId="0"/></sheetViews><sheetData>' + sd + '</sheetData></worksheet>' }];
+  }
+  const xlsx = (rows, sheetName) => zip(xlsxFiles(rows, sheetName));
+  const SLOT_DIRS = ['1 - الصورة الأساسية', '2 - البيئة المحيطة', '3 - المميزات والتفاصيل', '4 - المقاسات', '5 - صور إضافية'];
+  const safeName = (s) => String(s || 'Product').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Product';
+  // backup plan: which file goes where — pure, so the browser only fills in the bytes
+  function backupPlan(root, items, ext) { const out = []; items.forEach((it) => (it.slots || []).forEach((sl, k) => { if (sl && sl.src) out.push({ dir: SLOT_DIRS[Math.min(k, 4)], src: sl.src, name: root + '/' + SLOT_DIRS[Math.min(k, 4)] + '/' + safeName(it.name) + '-0' + (k + 1) + '-' + safeName(it.sku || 'SKU') + '.' + (ext || 'webp') }); })); return out; }
+  // ---------------- phase 5.3: the AI content (docs/superpowers/plans/2026-10-29-phase-5-3-ai-content.md) ----------------
+  // The AI answers plain text (decision 3); the page shows and edits it as text. keywords / bullets come as lists.
+  const AI_KEYS = ['name', 'short', 'long', 'keywords', 'bullets', 'seo_title', 'seo_description'];
+  // the server's answer → one editable text per field: keywords on one line (« · »), bullets one per line («• »)
+  function aiDisplay(out) {
+    const one = (o) => { const r = {}; if (!o) return r; AI_KEYS.forEach((k) => { const v = o[k]; if (Array.isArray(v)) r[k] = k === 'bullets' ? v.map((x) => '• ' + x).join('\n') : v.join(' · '); else if (typeof v === 'string' && v) r[k] = v; }); return r; };
+    return { ar: one(out && out.ar), en: one(out && out.en) };
+  }
+  // plain text → WooCommerce's description HTML: a blank line between paragraphs, <br> inside one, & < > escaped — so it passes
+  // product_save's allow-list (p / br only)
+  const hesc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  function paraHtml(text) {
+    return String(text == null ? '' : text).replace(/\r\n?/g, '\n').split(/\n\s*\n/).map((x) => x.split('\n').map((l) => l.trim()).filter(Boolean))
+      .filter((ls) => ls.length).map((ls) => '<p>' + ls.map(hesc).join('<br>') + '</p>').join('');
+  }
+  // «احفظ على المنتج»: the shown texts (edited) → IBProducts.save's { fields, ar }: name, short / long descriptions (as HTML) and
+  // SEO of each language; keywords and bullets are for copying only; the Arabic only when the product has its translation;
+  // empty texts left out; a name or SEO line is one line with no < >
+  const AI_SAVE = { name: 'name', short: 'short_description', long: 'description', seo_title: 'seo_title', seo_description: 'seo_description' };
+  function aiSaveChange(shown, hasAr) {
+    const pick = (o) => { const r = {}; if (!o) return r; Object.keys(AI_SAVE).forEach((k) => { const v = typeof o[k] === 'string' ? o[k].trim() : ''; if (!v) return;
+      r[AI_SAVE[k]] = k === 'short' || k === 'long' ? paraHtml(v) : v.replace(/[<>]/g, '').replace(/\s+/g, ' ').trim(); }); return r; };
+    return { fields: pick(shown && shown.en), ar: hasAr ? pick(shown && shown.ar) : {} };
+  }
+  // the studio (phase 5.3, decision 6): an AI answer for one batch item → the item filled, each field it filled marked in it.ai
+  // («AI — راجع»). The names only when empty; a description language only when empty unless o.force (an explicit «اكتب بالـ AI»);
+  // the categories added with the sections above them (catToggle); the colors from the table (Simple: the first one), replacing
+  // the sheet's names that were not in it; the sizes only when the item had none. o: { tree, type, force } → the keys marked.
+  function aiApply(it, fields, want, o) {
+    const f = fields || {}; const opts = o || {}; const marked = []; const empty = (v) => !String(v == null ? '' : v).trim();
+    const mark = (k) => { it.ai = Object.assign({}, it.ai || {}); it.ai[k] = true; marked.push(k); };
+    if (want.includes('nameEn') && f.nameEn && empty(it.nameEn)) { it.nameEn = f.nameEn; mark('nameEn'); }
+    if (want.includes('nameAr') && f.nameAr && empty(it.nameAr)) { it.nameAr = f.nameAr; mark('nameAr'); }
+    if (want.includes('desc')) {
+      let n = 0;
+      if (f.shortDesc && (opts.force || empty(it.shortDesc))) { it.shortDesc = f.shortDesc; n++; }
+      if (f.shortDescAr && (opts.force || empty(it.shortDescAr))) { it.shortDescAr = f.shortDescAr; n++; }
+      if (n) mark('desc');
+    }
+    if (want.includes('category') && Array.isArray(f.categories) && f.categories.length && opts.tree) {
+      let sel = { chosen: new Set(it.categories || []), auto: new Set() };
+      f.categories.forEach((id) => { if (opts.tree.byId.has(Number(id))) sel = catToggle(opts.tree, sel, Number(id), true); });
+      const next = [...sel.chosen];
+      if (next.length !== (it.categories || []).length) { it.categories = next; mark('category'); }
+    }
+    if (want.includes('variations') && Array.isArray(f.colors) && f.colors.length) {
+      const multi = opts.type === 'Variable';
+      it.colors = multi ? f.colors.slice() : [f.colors[0]]; it.unknownColors = [];
+      if (Array.isArray(f.sizes) && f.sizes.length && !(it.sizes || []).length) it.sizes = multi ? f.sizes.slice() : [f.sizes[0]];
+      mark('variations');
+    }
+    return marked;
+  }
+  // ---------- the assistant's category plan (the owner 15 Nov — 2026-11-15-assistant-categories.md): «اعملي القسم كذا انجليزي و عربي و جواه
+  // قسم فرعي كذا و كذا … بس يوريني قبل ما يطبق». The plan is an outline — rows of { level, en, ar } in order: level 1 is a top row, a
+  // deeper row sits under the nearest shallower row before it — so creating the rows in order always makes a parent before its children.
+  const PLAN_DEPTH = 4; const PLAN_MAX = 40;
+  const planKey = (s) => String(s == null ? '' : s).trim().toLowerCase();
+  /** The outline made valid: names trimmed (a row with neither name is dropped), the first row level 1, a row never more than one level
+   *  deeper than the row before it, at most PLAN_DEPTH levels and PLAN_MAX rows. */
+  function planOutline(items) {
+    const out = []; let prev = 0;
+    for (const x of Array.isArray(items) ? items : []) {
+      if (!x || typeof x !== 'object') continue;
+      const en = String(x.en == null ? '' : x.en).trim().slice(0, 80); const ar = String(x.ar == null ? '' : x.ar).trim().slice(0, 80); if (!en && !ar) continue;
+      const want = Number.isInteger(Number(x.level)) ? Number(x.level) : 1; const level = Math.max(1, Math.min(want, prev + 1, PLAN_DEPTH));
+      out.push({ level, en, ar }); prev = level; if (out.length >= PLAN_MAX) break;
+    }
+    return out;
+  }
+  /** Each row's parent row (its index; -1 = a top row of the plan). */
+  function planParents(rows) {
+    const last = []; return (rows || []).map((r, i) => { const lv = Math.max(1, Number(r.level) || 1); const p = lv > 1 && last[lv - 1] != null ? last[lv - 1] : -1; last[lv] = i; last.length = lv + 1; return p; });
+  }
+  /** The index after row i's last descendant (the rows i … end-1 are the row and everything under it). */
+  function planEnd(rows, i) { let j = i + 1; while (j < rows.length && rows[j].level > rows[i].level) j += 1; return j; }
+  /**
+   * What «نشر» does with each row → [{ parent, parentId, existing, dup }]. parentId: the site's id of the row's parent (underId — 0 = a main
+   * category — for a top row; the parent row's id once it was made or found), null while the parent is not on the site yet. existing: the id
+   * of a category already on the site under that parent with the same English name (it is used as it is, never made twice). dup: an
+   * earlier row of the plan under the same parent has the same English name. rows: [{ level, en, id? }]; cats: [{ id, name, parentId }].
+   */
+  function planResolve(rows, cats, underId) {
+    const parents = planParents(rows); const site = new Map();
+    (cats || []).forEach((c) => { const k = Number(c.parentId) || 0; if (!site.has(k)) site.set(k, new Map()); const n = planKey(c.name); if (n && !site.get(k).has(n)) site.get(k).set(n, Number(c.id)); });
+    const seen = new Map(); const out = [];
+    (rows || []).forEach((r, i) => {
+      const p = parents[i]; const name = planKey(r.en);
+      const parentId = p < 0 ? (Number(underId) || 0) : (rows[p].id ? Number(rows[p].id) : out[p].existing);
+      const under = parentId == null ? null : site.get(parentId);
+      const existing = !r.id && name && under && under.has(name) ? under.get(name) : null;
+      if (!seen.has(p)) seen.set(p, new Set()); const dup = !!name && seen.get(p).has(name); if (name) seen.get(p).add(name);
+      out.push({ parent: p, parentId: parentId == null ? null : parentId, existing, dup });
+    });
+    return out;
+  }
+
+  return { FAKE_MAX, FAKE_AMOUNT_MAX, FAKE_PERCENT_MAX, fakeRule, fakeTier, fakeRegular, fakeLines, PLAN_DEPTH, PLAN_MAX, planOutline, planParents, planEnd, planResolve, aiDisplay, paraHtml, aiSaveChange, aiApply, brandCode, serialText, sizeDigits, studioSku, suggestColorCode, parseCsv, parseXlsx, xlsxPhotos, mapColumns, rowsToItems, photoName, catFromPath, itemIssues, STUDIO_FIELDS, catTree, catAncestors, catToggle, catSearch, catOptions, outOfStock, categoriesRank, priceFromVendor, randomMarkup, ceil10, MARKUP_MIN, MARKUP_MAX, crc32, zip, xlsx, xlsxFiles, backupPlan, SLOT_DIRS, safeName, IMG_SIZES, customSize, IMG_MODELS, imgCredits, designCode, designBase, variantSku, SLOTS, SLOT_HINT, slotPrompt, credits, catsOf, inCategory, bulkPrice, shiftRate, rateScopes, ratePlan, buildSku, skuParts, serialStart, serials, sizeCode, price, DISCOUNTS, rotatingDiscount, imageName, imagePath, combos, stockState, completeness, trashDaysLeft, trashSoon, TRASH_DAYS, moveVendor, bumpPrice, validateCode, groupImages, VIDEO_MODELS, scenesTotal, scenesFit, campaignPieces };
+});
+

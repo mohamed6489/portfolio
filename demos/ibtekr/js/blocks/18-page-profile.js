@@ -1,0 +1,665 @@
+
+/* Profile «ملفي» — Figma page 382:12596. the tabs in TABS (decision 38: no «الإنجازات» / «التفضيلات»). Admin opening a member (#member-Mxx) sees the SAME page + admin-only beige cards. */
+(function () {
+  'use strict';
+  const U = window.IBUI, O = window.IbtekrOps, K = window.IBKit;
+  const { h, Icon, Button } = U; const S = K.store;
+  // decision 38: «الإنجازات» and «التفضيلات» removed; decision 39: «بيانات الحساب» (the old «الحساب والأمان», id kept for #profile-security)
+  // right after «نظرة عامة», with the documents («مستندات وعقود») inside it
+  // the owner 11 Nov: «طلباتي» (the team requests I opened) right after «مهامي»
+  const TABS = [['overview', 'نظرة عامة'], ['security', 'بيانات الحساب'], ['tasks', 'مهامي'], ['requests', 'طلباتي'], ['hours', 'ساعات العمل'], ['performance', 'أدائي'], ['salary', 'مرتبي'], ['alerts', 'تنبيهاتي']];
+  const st = { tab: 'overview', who: null, taskSub: 'today', showPay: false, newTask: '', notes: {}, bank: {}, bankShown: {}, perfQ: null, slips: {} };
+  const rerender = () => window.IBPages.render('profile');
+  // decision 30: «me» is null — never K.ME captured before the sign-in (an earlier hash ran with the default M01, so an admin saw M01)
+  const whoId = () => st.who || K.ME;
+  const isAdminView = () => !!st.who && st.who !== K.ME;
+  const HR = () => window.IBPages.all().hr.api;
+  const label = (id) => (isAdminView() ? { tasks: 'المهام', requests: 'الطلبات', performance: 'الأداء', salary: 'المرتب' }[id] : null) || TABS.find((t) => t[0] === id)[1];
+  // phase 10 T7: the HR tabs read IBHR (app/js/adapter/hr.js) — the server's rows under RLS (mine with hr.view N, my team's with P, all
+  // with F) and the money mine or sensitive.salaries'; the alerts and the prefs stay as they were; the tasks are IBHR's too (decision 25)
+  const IH = () => window.IBHR;
+  const HD = () => (IH() ? IH().data : K.store);
+  const can = () => (IH() ? IH().can() : { view: 'N', edit: false, approve: false, salaries: false, admin: false });
+  // the member: the HR numbers from IBHR, who they are (name, contact, 2FA, role, status) from the directory's live object — IBAuth flips
+  // its twofa at once; a member only hr_team() shows (a manager's team) comes from IBHR alone
+  const ID_KEYS = ['name', 'email', 'phone', 'twofa', 'status', 'role', 'title', 'dept', 'manager'];
+  const HM = (id) => { const d = K.member(id); const r = IH() && IH().member(id); if (!r) return d; if (!d || !d.id) return r; const m = Object.assign({}, r); ID_KEYS.forEach((k) => { if (d[k] !== undefined) m[k] = d[k]; }); return m; };
+  const seesMoney = (m) => !!(m && m.id) && (m.id === K.ME || can().salaries);
+  const tdy = () => (IH() ? IH().today() : K.TODAY); const thisMonth = () => tdy().slice(0, 7);
+  const monName = (k) => K.AR_MON[Number(String(k).slice(5, 7)) - 1] || ''; const monLabel = (k) => monName(k) + ' ' + String(k).slice(0, 4);
+  const QN = ['الأول', 'التاني', 'التالت', 'الرابع'];
+  const qOf = (k) => (IH() ? IH().quarterOf(k) : k.slice(0, 4) + '-Q' + (Math.floor((Number(k.slice(5, 7)) - 1) / 3) + 1));
+  const qMonths = (q) => { const y = q.slice(0, 4); const n = Number(q.slice(-1)); return [1, 2, 3].map((i) => y + '-' + String((n - 1) * 3 + i).padStart(2, '0')); };
+  const qLabel = (q) => 'الربع ' + QN[Number(q.slice(-1)) - 1] + ' ' + q.slice(0, 4); const qShort = (q) => 'Q' + q.slice(-1);
+  // a text field in the page being typed in: the live redraws wait (a modal's fields are not the page's)
+  const typing = () => { const a = document.activeElement; return !!a && /^(INPUT|TEXTAREA)$/.test(a.tagName) && !(a.closest && a.closest('.modal')); };
+  // the payslips of a member (IBHR.slips), fetched once per HR load
+  let slipGen = 0;
+  function slipsOf(m) {
+    if (!seesMoney(m) || !IH()) return { status: 'ok', list: [] };
+    const c = st.slips[m.id]; if (c && c.gen === slipGen) return c;
+    const gen = slipGen; st.slips[m.id] = { gen, status: 'loading', list: c ? c.list : [] };
+    IH().slips(m.id).then((r) => { if (slipGen !== gen) return; st.slips[m.id] = { gen, status: r.ok ? 'ok' : 'error', list: r.ok ? r.list : [] }; if (window.IBPages.current === 'profile' && !typing()) rerender(); });
+    return st.slips[m.id];
+  }
+  document.addEventListener('ib:hr', () => { slipGen += 1; st.bank = {}; if (window.IBPages.current === 'profile' && !typing()) rerender(); });
+
+  // decision 45 (owner 10 Nov — «غيّر زرار تعديل البيانات لدروب داون فيها + وقت إضافي، تعديل البيانات، فتح طلب»): the header's button is a
+  // menu — the overtime request (decision 44, IBShell.otRequest), «تعديل بياناتي», and a new request on «طلبات الفريق» (IbtekrApp.newTicket)
+  function myMenu(m) {
+    const wrap = h('div', { class: 'pop-anchor', 'data-popover-root': '' });
+    const btn = Button({ label: 'إجراءات سريعة', iconEnd: 'chevD', attrs: { 'aria-haspopup': 'menu', 'data-my-menu': '' } }); // the owner 11 Nov (was «تعديل بياناتي»)
+    const opts = [window.IBShell && window.IBShell.otRequest ? { value: 'ot', label: '+ وقت إضافي', icon: 'clock' } : null, { value: 'edit', label: 'تعديل البيانات', icon: 'edit' },
+      window.IbtekrApp && window.IbtekrApp.newTicket ? { value: 'req', label: 'فتح طلب', icon: 'send' } : null].filter(Boolean);
+    const pop = U.popover(wrap, btn, (close) => U.DropdownMenu({ options: opts, role: 'menu', end: true, onSelect: (v) => { close();
+      if (v === 'ot') window.IBShell.otRequest(); else if (v === 'edit') editInfo(m); else if (v === 'req') window.IbtekrApp.newTicket(); } }));
+    btn.addEventListener('click', pop.toggle); wrap.append(btn); return wrap;
+  }
+  function view() {
+    const m = HM(whoId()); const ad = isAdminView();
+    if (!m.id) return [K.Section('', K.Empty('الملف ده مش ظاهر ليك', 'افتح ملفات الفريق من «الموارد البشرية › الفريق».'))];
+    const sh = window.IBShell ? window.IBShell.state() : { state: 'out' };
+    const sub = [m.title, m.role].filter(Boolean).join(' · ') + (m.manager ? ' · المدير المباشر: ' + HM(m.manager).name + (m.managerFixed ? '' : ' (مدير الدور)') : ''); // 0092
+    const head = h('div', { class: 'card prof-head' }, h('span', { class: 'avatar xl', 'aria-hidden': 'true' }, m.name.charAt(0)),
+      h('div', { class: 'grow' }, h('h1', { class: 't-h3' }, m.name), h('div', { class: 't-small help' }, sub || '—'), h('div', { class: 'acts-inline' }, m.role ? K.Tag('brand', m.role) : null, m.status === 'suspended' ? K.Tag('error', 'موقوف') : K.Tag('success', 'نشط'), !ad ? K.Tag(sh.state === 'out' ? 'neutral' : sh.state === 'overtime' ? 'orange' : 'success', sh.state === 'out' ? (sh.ended ? 'خلص الدوام' : 'خارج الدوام') : sh.state === 'overtime' ? 'وقت إضافي' : 'على الدوام') : K.Tag(HR().status(m)[1], HR().status(m)[0]))),
+      h('div', { class: 'acts-inline' }, ad ? Button({ label: 'رجوع للفريق', onClick: () => { location.hash = 'hr-team'; } }) : myMenu(m)));
+    const tabs = K.MainTabs({ items: TABS.map(([id]) => ({ id, label: label(id) })), active: st.tab, onChange: (id) => { st.tab = id; setHash(); rerender(); }, label: 'أقسام الملف' });
+    const body = h('div', { class: 'panel', role: 'tabpanel', 'aria-labelledby': 'tab-' + st.tab }, ...tab(m));
+    if (st.tab === 'overview' && !ad && m.id === K.ME) setTimeout(() => K.applyPanelPrefs('profile:overview', body), 0); // decision 27
+    return [ad ? U.InlineNote({ kind: 'warning', children: 'بتشوف ملف ' + m.name + (can().admin ? ' كأدمن' : '') + ' — الكروت البيج ظاهرة ليك بس.' }) : null, head, tabs, body];
+  }
+  const setHash = () => { try { history.replaceState(null, '', isAdminView() ? '#member-' + st.who : '#profile' + (st.tab === 'overview' ? '' : '-' + st.tab)); } catch (e) { /* */ } };
+
+  function tab(m) {
+    switch (st.tab) {
+      case 'overview': return overview(m);
+      case 'tasks': return tasks(m);
+      case 'requests': return requestsTab(m);
+      case 'hours': return hours(m);
+      case 'performance': return performance(m);
+      case 'salary': return salary(m);
+      case 'security': return security(m);
+      case 'alerts': return alertsTab(m);
+      default: return overview(m);
+    }
+  }
+
+
+  // ---------- تنبيهاتي (owner 22 Oct): personal prefs inside what the role allows ----------
+  function alertsTab(m) {
+    const NR = window.IbtekrNotifRoles, NRV = window.IBNotifRoles; if (!NR || !NRV) return [];
+    const P = (S.notifPrefs[m.id] = S.notifPrefs[m.id] || { mute: [], ch: 'زي إعدادات الشركة', quiet: 'زي إعدادات الشركة', digestAt: '' });
+    const save = (msg) => { K.logEvent('profile.alerts', m.name + ': ' + msg); K.toast('اتحفظ'); rerender(); document.dispatchEvent(new Event('ib:notify')); };
+    const sel = (id, label, val, opts, on, help) => h('div', null, U.Select({ id, label, options: opts.map((x) => ({ value: x, label: x })), value: val, onChange: (v) => { on(v); save(label + ' = ' + v); } }), help ? h('div', { class: 't-small help' }, help) : null);
+    // decision 26 (the owner, 10 Nov — «عايز تنبيهات اللي هي إشعارات وتبقى متقسمة تابات حسب النوع»; the mute table removed): my notifications
+    // themselves — the bell's sections (IBNotifRoles.viewSections: the server's alerts + each type) as tabs, each item opens its place
+    const secs = (m.id === K.ME && NRV.viewSections ? NRV.viewSections(true) : []).filter((x) => x && x.tabs && x.tabs.length);
+    const cnt = (x) => (x.received != null ? x.received : x.tabs[0][2].length);
+    const all = [].concat(...secs.map((x) => x.tabs[0][2].map((it) => Object.assign({ sec: x.label }, it))));
+    const cur = st.ntfSec === 'all' || !secs.some((x) => x.id === st.ntfSec) ? null : secs.find((x) => x.id === st.ntfSec);
+    const sub = cur ? (cur.tabs.find((t) => t[0] === st.ntfTab) || cur.tabs[0]) : null;
+    const items = cur ? sub[2] : all;
+    const item = (it) => h('button', { type: 'button', class: 'ntf-item' + (it.muted ? ' muted' : ''), role: 'listitem', 'data-ntf-item': '', onClick: () => { if (it.run) it.run(); } },
+      h('span', { class: 'av ' + (it.tone || 'neutral'), 'aria-hidden': 'true' }, Icon(it.icon || 'bell', 'sm')), h('span', { class: 'txt' }, h('b', null, it.title, it.muted ? h('span', { class: 'ntf-fyi' }, 'للعلم') : null), h('small', null, it.sub || '')),
+      !cur && it.sec ? h('span', { class: 'chip' }, it.sec) : null, it.meta ? h('span', { class: 'meta' }, it.meta) : null);
+    const list = m.id !== K.ME ? U.InlineNote({ children: 'التنبيهات بتظهر لصاحبها بس — من الجرس تقدر تختار «عرض تنبيهات» عضو تاني.' })
+      : h('div', { class: 'ntf-list my-ntf', role: 'list' }, items.length ? items.map(item) : U.EmptyState('كله تمام هنا', cur ? cur.empty || 'مفيش تنبيهات في القسم ده.' : 'مفيش تنبيهات دلوقتي.'));
+    return [K.Section('تنبيهاتي', [m.id === K.ME ? K.SubTabs({ items: [{ id: 'all', label: 'الكل', count: all.length }].concat(secs.map((x) => ({ id: x.id, label: x.label, count: cnt(x) }))), active: cur ? cur.id : 'all', onChange: (id) => { st.ntfSec = id; st.ntfTab = 'all'; rerender(); }, label: 'أنواع التنبيهات' }) : null,
+      cur && cur.tabs.length > 1 ? K.SubTabs({ items: cur.tabs.map((t) => ({ id: t[0], label: t[1], count: t[2].length })), active: sub[0], onChange: (id) => { st.ntfTab = id; rerender(); }, label: 'تابات ' + cur.label }) : null,
+      list], null, { sub: 'نفس الجرس — اضغط على أي تنبيه يفتح مكانه' }),
+      K.Section('طريقة الإرسال ليّا', [K.two(sel('np-ch', 'القنوات', P.ch, ['زي إعدادات الشركة', 'داخل السيستم بس', 'داخل السيستم + واتساب', 'داخل السيستم + إيميل', 'داخل السيستم + واتساب + إيميل'], (v) => { P.ch = v; }, 'داخل السيستم دايمًا شغال · واتساب/إيميل بس لو التنبيه نفسه مسموح له بيهم'),
+        sel('np-q', 'ساعات الهدوء بتاعتي', P.quiet, ['زي إعدادات الشركة', 'من 10:00 م إلى 8:00 ص', 'من 11:00 م إلى 9:00 ص', 'من 12:00 ص إلى 10:00 ص', 'مفيش'], (v) => { P.quiet = v; }, 'التنبيهات العاجلة (تصعيد / عاجل) بتوصل حتى في الهدوء')),
+        sel('np-dg', 'ميعاد ملخصي اليومي', P.digestAt || 'زي ميعاد الدور', ['زي ميعاد الدور'].concat(O.NOTIF_TIMES), (v) => { P.digestAt = v === 'زي ميعاد الدور' ? '' : v; }, 'الملخص اليومي لدور «' + m.role + '» من الإعدادات › تقارير المهام')], null, { sub: 'في حدود اللي الأدمن سامح بيه' })];
+  }
+
+  // ---------- نظرة عامة: simple summary ----------
+  // the HR rebuild (0083): the month's evaluation out of 5 — the latest month rated
+  const lastScore = (id) => { const ev = (HD().evals || {})[id] || {}; const k = Object.keys(ev).filter((x) => ev[x] && ev[x].total != null).sort().pop(); return k ? { k, v: ev[k].total } : null; };
+  const of5 = (v) => String(v).replace(/\.0$/, '') + ' / 5';
+  function overview(m) {
+    const open = autoOf(m).length; const D = HD(); const mk = thisMonth(); // owner batch 14 Nov decision 12: «مهامي» = the system's automatic tasks only
+    const need = isAdminView() ? 0 : needFromMe().length;
+    const days = D.attendance.filter((a) => a.member === m.id && a.date.startsWith(mk) && a.in != null).length;
+    const sc = lastScore(m.id); const qs = HR().qScore(m.id); const money = seesMoney(m); const slip = money && m.salary > 0 ? slipsOf(m).list[0] : null;
+    // decision 38 (the owner, 10 Nov — «الإنجازات تكون عدد المهام اللي الموظف أنجزها»): the tasks done, all time and this month
+    const done = tasksOf(m.id).filter((t) => t.status === 'خلصت'); const doneMonth = done.filter((t) => String(t.doneAt || '').slice(0, 7) === mk).length;
+    const tile = (t, v, sub, go, pre) => h('button', { type: 'button', class: 'card sum-tile', onClick: () => { if (go.charAt(0) === '#') { location.hash = go.slice(1); return; } if (pre) pre(); st.tab = go; setHash(); rerender(); } }, h('span', { class: 'kpi-label t-label' }, t), h('span', { class: 't-h3' }, K.Num(String(v))), h('span', { class: 't-small help' }, sub), h('span', { class: 'more t-small' }, 'التفاصيل ', Icon('chevL', 'sm')));
+    const own = !isAdminView() && m.id === K.ME; const NRV = window.IBNotifRoles;
+    const reqGo = 'requests'; // the owner 11 Nov: «طلباتي» in this file (the team requests the member opened — decision 33)
+    const TKA = window.IBTickets; const tkMine = TKA && TKA.state && TKA.state() === 'ready' ? TKA.all().filter((t) => t.createdBy && t.createdBy.uid && t.createdBy.uid === m.uid) : [];
+    const tkOpen = tkMine.filter((t) => ['open', 'in_progress', 'waiting'].includes(t.status)).length;
+    const ntfCount = own && NRV && NRV.viewSections ? NRV.viewSections(true).reduce((n, x) => n + (x.received != null ? x.received : ((x.tabs || [])[0] || [0, 0, []])[2].length), 0) : 0;
+    return [own ? h('div', { class: 'toolbar pn-bar' }, h('span', { class: 'grow' }), K.PanelButton('profile:overview', 'ملفي — نظرة عامة', () => document.querySelector('#pg-profile .panel'), rerender)) : null,
+      h('div', { class: 'cards' }, tile(isAdminView() ? 'مهامه' : 'مهامي', open, 'تلقائية من السيستم — بتختفي لما تتحل', 'tasks', () => { st.taskSub = 'today'; }), tile('ساعات ' + monName(mk), K.hm(m.monthMin || 0), days + ' يوم حضور', 'hours'), tile('رصيد الإجازات', (m.leave || 0) - (m.used || 0), 'من ' + (m.leave || 0) + ' يوم', reqGo), isAdminView() || need === 0 ? tile(isAdminView() ? 'طلباته' : 'طلباتي', tkOpen, 'مفتوحة على «طلبات الفريق»', reqGo, () => { st.reqTab = 'mine'; }) : tile('محتاجة منك', need, 'طلبات فريقك', '#tickets')),
+      h('div', { class: 'cards' }, tile(sc ? 'تقييم ' + monName(sc.k) : 'التقييم', sc ? of5(sc.v) : '—', sc ? (qs != null ? 'الربع ' + of5(qs) : 'تقييم الشهر') : 'لسه مفيش تقييم', 'performance'), tile(isAdminView() ? 'إنجازاته' : 'إنجازاتي', done.length, 'مهمة خلصت · ' + doneMonth + ' الشهر ده', 'tasks', () => { st.taskSub = 'done'; }),
+        tile('آخر مرتب', slip ? K.money(slip.net) : '—', !money ? 'المرتبات للأدمن بس' : !(m.salary > 0) ? 'مفيش مرتب مسجل' : slip ? 'صافي ' + monName(slip.month) : 'القسيمة بتظهر بعد اعتماد الكشف', 'salary'), tile('المستندات', m.contract === 'missing' ? 'ناقص' : 'تمام', m.contract === 'expiring' ? 'العقد بيخلص قريب' : 'العقد والمستندات', 'security')),
+      // decision 27 (the owner, 10 Nov — «إضافة زرار تخصيص اللوحة… وإمكانية إظهار عدد التنبيهات أو الطلبات»): my alerts and my open requests,
+      // and «تخصيص اللوحة» to hide / order every card (user_prefs panel.prefs «profile:overview»)
+      own ? h('div', { class: 'cards' }, tile('التنبيهات', ntfCount, ntfCount ? 'من الجرس — اضغط تشوفها' : 'مفيش تنبيهات دلوقتي', 'alerts'), tile('طلباتي المفتوحة', tkOpen, 'من ' + tkMine.length + ' طلب', reqGo, () => { st.reqTab = 'mine'; })) : null,
+      isAdminView() ? adminCards(m) : null];
+  }
+  // the beige cards when another member's file is open: each by what the viewer may do (the server decides again)
+  function adminCards(m) {
+    const c = can(); const kv = (k, v) => [k, v]; const ce = canEdit(m);
+    const job = c.salaries || c.edit || ce ? h('section', { class: 'card admin' }, h('div', { class: 'sec-h' }, h('h2', { class: 't-h5' }, 'الوظيفة والمرتب'), Button({ size: 'sm', label: 'تعديل', onClick: () => editJob(m) })),
+      K.Kv([kv('الوظيفة', m.title || '—'), kv('الدور', m.role || '—'), kv('المرتب', c.salaries ? K.money(m.salary || 0) + ' ج.م' : '••••'), kv('الحجز للبونص', c.salaries ? K.money(m.holdback || 0) + ' ج.م' : '••••'), kv('سعر اليوم والساعة', c.salaries && m.salary ? 'اليوم ' + K.money(O.rates(m.salary).daily) + ' · الساعة ' + K.money(O.rates(m.salary).hourly) : '—'), kv('الشيفت', m.shift.map((x) => (K.t12 ? K.t12(x) : x)).join(' – ')), kv('تاريخ التعيين', m.hire ? K.dlabel(m.hire) : '—'), kv('الإجازة السنوية', (m.leave || 0) + ' يوم')])) : null;
+    const notes = c.edit ? h('section', { class: 'card admin' }, h('h2', { class: 't-h5' }, 'ملاحظات داخلية'), (() => { const ta = h('textarea', { class: 'textarea', rows: 4, 'aria-label': 'ملاحظات داخلية', placeholder: 'مش ظاهرة للعضو' }); ta.value = m.hrNotes || '';
+      ta.addEventListener('change', () => { IH().memberUpdate(m.id, { notes: ta.value }).then((r) => K.toast(r.ok ? 'اتحفظت الملاحظة' : r.message || 'معرفناش نحفظها — جرّب تاني', r.ok ? 'success' : 'error')); }); return ta; })()) : null;
+    const quick = c.edit || c.salaries ? h('section', { class: 'card admin' }, h('h2', { class: 't-h5' }, 'إجراءات سريعة'), h('div', { class: 'quick' }, c.edit ? Button({ label: 'تسجيل حضور يدوي', icon: 'clock', onClick: () => HR().manualAtt(m) }) : null, c.edit ? Button({ label: 'رفع عقد', icon: 'attach', onClick: () => HR().uploadContract(m) }) : null, c.salaries ? Button({ label: 'قسيمة المرتب', icon: 'wallet', onClick: () => HR().payslipModal(m) }) : null)) : null;
+    const sec = c.admin ? h('section', { class: 'card admin' }, h('h2', { class: 't-h5' }, 'الأمان'), K.Kv([kv('الإيميل', m.email || '—'), kv('الموبايل', m.phone ? h('span', { dir: 'ltr' }, m.phone) : '—'), kv('التحقق بخطوتين', m.twofa ? 'مفعّل' : 'مش مفعّل')]),
+      h('div', { class: 'quick' }, Button({ size: 'sm', label: 'باسورد مؤقت جديد', onClick: () => HR().newPassword(m) })), h('div', { class: 't-small help' }, 'إيقاف الحساب والخروج من كل الأجهزة لعضو تاني مع صفحة الإعدادات — لحد وقتها من لوحة Supabase.')) : null;
+    return h('div', { class: 'admin-cards' }, ce ? memberCard(m) : null, job, notes, quick, sec);
+  }
+
+  // 0111 (the owner 16 Nov — «عايز امكانية للمدير المباشر او الادمن يقدر يعدل اي بيانات لاي فرد في الفريق و الصلاحيات»; his answers:
+  // the pay stays the admin's, and a manager gives nothing above his own): the admin or the member's direct manager sees «بيانات العضو
+  // والصلاحيات» on the member's file — «تعديل البيانات» (the name, the mobile, the email, the job title) and «الدور والصلاحيات» (the
+  // role, its level, the extra roles, the custom permissions, the status); the server judges each write again (member_can_edit,
+  // perms_within_mine)
+  const canEdit = (m) => !!(m && IH() && IH().canEditMember && IH().canEditMember(m.id));
+  const LV_AR = { manager: 'مدير', employee: 'موظف', viewer: 'مشاهد' };
+  const PV = [{ value: 'F', label: 'مسموح' }, { value: 'P', label: 'عرض بس' }, { value: 'N', label: 'غير مسموح' }]; const RANK = { F: 2, P: 1, N: 0 };
+  const SETT = () => window.IBSettings;
+  const dirRow = (m) => (window.IBDirectory && window.IBDirectory.members ? window.IBDirectory.members().find((x) => x.id === m.id) : null) || m;
+  // what I may hand over: the admin anything; a manager up to his own (has_perm on my rows)
+  const myRank = (key) => (can().admin ? 2 : RANK[window.IBDirectory && window.IBDirectory.perm ? window.IBDirectory.perm(key) : 'N'] || 0);
+  const withinMe = (perms) => Object.entries(perms || {}).every(([k, v]) => (RANK[v] || 0) <= myRank(k));
+  function memberCard(m) {
+    const d = dirRow(m); const kv = (k, v) => [k, v]; const roleName = (id) => ((window.IBDirectory && window.IBDirectory.roles ? window.IBDirectory.roles() : []).find((r) => r.id === id) || {}).name || id;
+    const extras = (d.extraRoles || []).map(roleName); const own = d.customPerms && typeof d.customPerms === 'object' ? Object.keys(d.customPerms).length : 0;
+    return h('section', { class: 'card admin', 'data-member-card': '' }, h('div', { class: 'sec-h' }, h('h2', { class: 't-h5' }, 'بيانات العضو والصلاحيات'),
+      h('div', { class: 'acts-inline' }, Button({ size: 'sm', label: 'تعديل البيانات', attrs: { 'data-member-info': '' }, onClick: () => editMember(m) }), Button({ size: 'sm', label: 'الدور والصلاحيات', attrs: { 'data-member-access': '' }, onClick: () => editAccess(m) }))),
+      K.Kv([kv('الاسم', d.name || '—'), kv('الموبايل', d.phone ? h('span', { dir: 'ltr' }, d.phone) : '—'), kv('الإيميل', d.email || '—'), kv('المسمى الوظيفي', d.title || '—'),
+        kv('الدور', (d.role || '—') + ' · ' + (LV_AR[d.level] || 'موظف')), kv('أدوار إضافية', extras.length ? extras.join('، ') : '—'), kv('صلاحيات مخصصة', own ? own + ' صلاحية' : 'حسب الدور'), kv('الحالة', d.status === 'suspended' ? 'موقوف' : 'نشط')]),
+      h('div', { class: 'quick' }, Button({ size: 'sm', label: 'ابعت إيميل الباسورد', attrs: { 'data-member-invite': '' }, onClick: () => IH().memberInvite(m.id).then((r) => K.toast(r.ok ? 'اتبعت لـ ' + (d.email || d.name) : r.message || 'معرفناش نبعته — جرّب تاني', r.ok ? 'success' : 'error')) })),
+      h('p', { class: 't-small help', style: 'margin:0' }, can().admin ? 'المرتب والحجز والبدلات من «تعديل» في كارت الوظيفة اللي تحت.' : 'انت المدير المباشر — تقدر تعدّل كل بياناته وصلاحياته لحد صلاحياتك انت؛ المرتب للأدمن بس.'));
+  }
+  function editMember(m) {
+    const d = dirRow(m); const admin = can().admin; // the login email is the admin's only (security review — 0111 team-admin)
+    K.form({ title: 'تعديل بيانات ' + d.name, values: { name: d.name || '', phone: d.phone || '', email: d.email || '', title: d.title || '' },
+      fields: (f, e, set) => [K.field.text('name', 'الاسم', f, e, set, { required: true }), K.two(K.field.text('phone', 'الموبايل', f, e, set, { required: true, inputmode: 'tel' }), admin ? K.field.text('email', 'الإيميل', f, e, set, { required: true, help: 'إيميل الدخول بيتغيّر على طول' }) : K.field.text('email', 'الإيميل', f, e, set, { disabled: true, help: 'إيميل الدخول بيتغيّر من الأدمن بس' })),
+        K.field.text('title', 'المسمى الوظيفي', f, e, set, {})],
+      validate: (f) => { const e = {}; const nm = String(f.name || '').trim(); if (nm.length < 2 || nm.length > 80) e.name = 'اكتب الاسم (من 2 لـ 80 حرف)';
+        if (O.identifierKind(f.phone) !== 'phone') e.phone = 'رقم موبايل مصري صحيح'; if (admin && O.identifierKind(f.email) !== 'email') e.email = 'إيميل صحيح'; if (String(f.title || '').length > 80) e.title = 'لحد 80 حرف'; return e; },
+      submitLabel: 'حفظ', submit: (f, md) => {
+        if (md._busy) return false; md._busy = true;
+        (async () => {
+          const name = String(f.name || '').trim().replace(/\s+/g, ' '); const phone = O.toLatin(String(f.phone || '')).trim(); const title = String(f.title || '').trim(); const email = String(f.email || '').trim().toLowerCase();
+          if (name !== String(d.name || '') || phone !== String(d.phone || '') || title !== String(d.title || '')) { const r = await IH().memberInfoSet(m.id, { name, phone, title }); if (!r.ok) return r; }
+          if (admin && email !== String(d.email || '').toLowerCase()) { const r = await IH().memberEmailSet(m.id, email); if (!r.ok) return r; }
+          return { ok: true };
+        })().then((r) => { md._busy = false; if (r.ok) { md.close(); K.toast('اتحفظت بيانات ' + name0(f, d), 'success'); rerender(); } else K.toast(r.message || 'حصلت مشكلة — جرّب تاني', 'error'); });
+        return false;
+      } });
+  }
+  const name0 = (f, d) => String(f.name || d.name || '').trim();
+  function editAccess(m) {
+    const S = SETT(); const d = dirRow(m); if (!S) return; const admin = can().admin;
+    const roles = (window.IBDirectory && window.IBDirectory.roles ? window.IBDirectory.roles() : []).filter((r) => r && !r.hidden && (admin || (r.id !== 'admin' && withinMe(r.permissions))));
+    const roleOpts = roles.map((r) => ({ value: r.id, label: r.name })); if (d.roleId && !roleOpts.some((o) => o.value === d.roleId)) roleOpts.unshift({ value: d.roleId, label: d.role || d.roleId, disabled: true });
+    const cur = d.customPerms && typeof d.customPerms === 'object' ? d.customPerms : {}; const v0 = { role: d.roleId || '', level: d.level || 'employee', status: d.status === 'suspended' ? 'suspended' : 'active', reason: '' };
+    S.PERM_KEYS.forEach((k) => { v0['p:' + k] = cur[k] || 'role'; }); (d.extraRoles || []).forEach((x) => { v0['x:' + x] = true; });
+    K.form({ title: 'الدور والصلاحيات — ' + d.name, wide: true, values: v0,
+      note: U.InlineNote({ children: admin ? 'التغيير بيتطبق على العضو ده بس.' : 'انت المدير المباشر — الاختيارات اللي فوق صلاحياتك مش ظاهرة، والسيرفر بيرفض أي صلاحية أعلى منها.' }),
+      fields: (f, e, set) => [K.two(K.field.select('role', 'الدور الأساسي', roleOpts, f, e, set, {}), K.field.select('level', 'المستوى في الدور', ['manager', 'employee', 'viewer'].map((x) => ({ value: x, label: LV_AR[x] })), f, e, set, {})),
+        h('div', { class: 't-label', style: 'margin-top:4px' }, 'أدوار إضافية'),
+        h('div', { class: 'acts-inline', 'data-extra-roles': '', style: 'flex-wrap:wrap' }, roles.filter((r) => r.id !== 'admin' && r.id !== f.role).map((r) => h('label', { class: 'acts-inline' }, h('input', { type: 'checkbox', checked: !!f['x:' + r.id], onChange: (ev) => set('x:' + r.id, ev.target.checked, true) }), h('span', null, r.name)))),
+        K.two(K.field.select('status', 'الحالة', [{ value: 'active', label: 'نشط' }, { value: 'suspended', label: 'موقوف' }], f, e, set, {}), f.status === 'suspended' && d.status !== 'suspended' ? K.field.text('reason', 'سبب الإيقاف', f, e, set, { required: true }) : h('span')),
+        h('div', { class: 't-label', style: 'margin-top:4px' }, 'صلاحيات مخصصة (فوق الدور)'),
+        h('div', { class: 'rp-list' }, S.PERMS.map(([g, rows]) => h('div', { class: 'rp-group' }, h('b', { class: 't-label' }, g), rows.map(([n, key]) => h('div', { class: 'ma-row' }, h('span', null, n),
+          U.Select({ id: 'ma-' + key.replace('.', '-'), label: '', options: [{ value: 'role', label: 'حسب الدور' }].concat(PV.filter((o) => RANK[o.value] <= myRank(key) || f['p:' + key] === o.value)), value: f['p:' + key], onChange: (v) => set('p:' + key, v, true) }))))))],
+      validate: (f) => { const e = {}; if (f.status === 'suspended' && d.status !== 'suspended' && !String(f.reason || '').trim()) e.reason = 'اكتب سبب الإيقاف'; return e; },
+      submitLabel: 'حفظ', submit: (f, md) => {
+        if (md._busy) return false; md._busy = true; const uid = d.uid;
+        (async () => {
+          // a new main role starts the member at «موظف» (0096 profiles_level_on_role): the role first, then the level if it differs
+          const roleNew = !!f.role && f.role !== d.roleId;
+          if (roleNew) { const r = await S.setMemberRole(uid, f.role); if (!r.ok) return r; }
+          if (f.level !== (roleNew ? 'employee' : (d.level || 'employee'))) { const r = await S.setMemberLevel(uid, f.level); if (!r.ok) return r; }
+          const extras = roles.map((r) => r.id).filter((x) => f['x:' + x] && x !== f.role); const was = (d.extraRoles || []).slice().sort().join(',');
+          if (extras.slice().sort().join(',') !== was) { const r = await S.setMemberRoles(uid, extras); if (!r.ok) return r; }
+          const perms = {}; S.PERM_KEYS.forEach((k) => { const v = f['p:' + k]; if (v && v !== 'role') perms[k] = v; });
+          if (JSON.stringify(perms) !== JSON.stringify(Object.fromEntries(S.PERM_KEYS.filter((k) => cur[k]).map((k) => [k, cur[k]])))) { const r = await S.setMemberPerms(uid, perms); if (!r.ok) return r; }
+          if (f.status !== (d.status === 'suspended' ? 'suspended' : 'active')) { const r = await S.setMemberStatus(uid, f.status, f.reason || ''); if (!r.ok) return r; }
+          if (window.IBDirectory && window.IBDirectory.refresh) await window.IBDirectory.refresh();
+          return { ok: true };
+        })().then((r) => { md._busy = false; if (r.ok) { md.close(); K.toast('اتحفظ الدور والصلاحيات لـ ' + d.name, 'success'); rerender(); } else K.toast(r.message || 'حصلت مشكلة — جرّب تاني', 'error'); });
+        return false;
+      } });
+  }
+
+  // ---------- مهامي (phase 10 decision 25: IBHR.data.tasks — hr_tasks on the server, 0048) ----------
+  // the member's own tasks, the v5's tab as it is: the add box, the six statuses, «النهارده» / «المؤجل» / «خلصت» with block 12's rollover on
+  // Cairo's today; another member's file shows «المهام» to who may write them (the direct manager, hr.edit F — the server decides again)
+  const TD = () => (IH() ? IH().data.tasks || [] : []);
+  const tasksOf = (id) => TD().filter((t) => t.member === id);
+  const canT = (id) => !!(IH() && IH().canTask && IH().canTask(id));
+  const perm = (k) => (window.IBDirectory && window.IBDirectory.perm ? window.IBDirectory.perm(k) : 'N');
+  const T_TONE = { 'لسه': 'neutral', 'جاري': 'gold', 'متوقفة': 'orange', 'جاهزة للمراجعة': 'info', 'خلصت': 'success', 'اتأجلت': 'neutral' };
+  const T_EN = { 'لسه': 'To do', 'جاري': 'In progress', 'متوقفة': 'Hold', 'جاهزة للمراجعة': 'Ready for review', 'خلصت': 'Complete', 'اتأجلت': 'Postponed' };
+  // a count in Egyptian Arabic: 1 · 2 · 3–10 · 11+
+  const cnt = (n, one, two, few, many) => (n === 1 ? one : n === 2 ? two : n <= 10 ? n + ' ' + few : n + ' ' + many);
+  const CLOSED = ['مكتمل', 'ملغي', 'استرجاع', 'فشل']; const TK_OPEN = ['open', 'in_progress'];
+  // «تلقائية من السيستم»: what waits for the member right now, read from the live data — it goes by itself once it is handled. Mine: the
+  // reviews waiting for me (a click reviews), my team's requests / overtime waiting for my decision, my role's open tickets (each urgent one,
+  // then the count), the open orders not confirmed yet (orders.status F); another member's file: the reviews waiting for them
+  function autoOf(m) {
+    const out = []; const mine = m.id === K.ME;
+    TD().filter((t) => t.status === 'جاهزة للمراجعة' && t.reviewerUid && t.reviewerUid === m.uid)
+      .forEach((t) => out.push({ key: 'rv' + t.id, title: 'راجع: ' + t.title + ' — ' + (t.memberName || '—'), run: mine ? () => review(t) : null }));
+    if (!mine) return out;
+    const toReq = (t) => () => { location.hash = t ? 'tickets/' + t : 'tickets'; }; // decision 33: decided in the request's team ticket
+    needFromMe().forEach((x) => out.push(x.kind === 'req' ? { key: 'rq' + x.r.id, title: 'مراجعة طلب ' + x.r.type + ' — ' + (HM(x.r.member).name || '—'), run: toReq(x.r.ticket) }
+      : { key: 'ot' + x.o.id, title: 'تأكيد وقت إضافي — ' + (HM(x.o.member).name || '—'), run: toReq(x.o.ticket) }));
+    const TA = window.IBTickets;
+    if (TA && TA.can && TA.can().view && TA.state && TA.state() === 'ready') {
+      const open = TA.all().filter((t) => TK_OPEN.includes(t.status) && TA.isMine(t)); const urgent = open.filter((t) => t.priority === 'urgent');
+      urgent.forEach((t) => out.push({ key: 'tk' + t.id, title: 'الرد على طلب ' + t.id + ' (عاجل)', href: '#tickets/' + t.id }));
+      const rest = open.length - urgent.length;
+      if (rest > 0) out.push({ key: 'tk', title: 'الرد على ' + cnt(rest, 'طلب مفتوح', 'طلبين مفتوحين', 'طلبات مفتوحة', 'طلب مفتوح'), href: '#tickets' });
+    }
+    const DD = window.IBDashData;
+    if (DD && DD.rows && perm('orders.view') !== 'N' && perm('orders.status') === 'F') {
+      const n = DD.rows().filter((x) => x.confirm === 'غير مؤكد' && !CLOSED.includes(x.status)).length;
+      if (n) out.push({ key: 'or', title: 'تأكيد ' + cnt(n, 'أوردر غير مؤكد', 'أوردرين غير مؤكدين', 'أوردرات غير مؤكدة', 'أوردر غير مؤكد'), href: '#orders' });
+    }
+    return out;
+  }
+  const autoRow = (t) => h('div', { class: 'task auto', 'data-auto': t.key }, Icon('sparkle', 'sm'),
+    t.run ? h('a', { href: '#profile-tasks', role: 'button', onClick: (e) => { e.preventDefault(); t.run(); } }, t.title) : t.href ? h('a', { href: t.href }, t.title) : h('span', null, t.title),
+    h('span', { class: 't-small help' }, 'بتختفي لوحدها لما تتحل'));
+  const failed = (r) => { if (r && !r.ok && r.reason !== 'stale') { K.toast(r.message || 'معرفناش نحفظ — جرّب تاني', 'error'); if (window.IBPages.current === 'profile') rerender(); } };
+  // owner batch 14 Nov decision 12 («مبقاش فيه مهام خلاص — المهام هيا بس التلقائية اللي بتيجي من السيستم، غير كده كلها طلبات»): «مهامي»
+  // lists what the system asks of the member (reviews, team requests, the role's tickets, the unconfirmed orders) — no manual task, no
+  // add box; any other work is a request in «طلبات الفريق». hr_tasks stays in the database for the history.
+  function tasks(m) {
+    const auto = autoOf(m);
+    const fresh = window.IbtekrApp && window.IbtekrApp.newTicket && !isAdminView() ? Button({ type: 'brand', size: 'sm', icon: 'plus', label: 'فتح طلب', onClick: () => window.IbtekrApp.newTicket() }) : null;
+    return [K.Section(isAdminView() ? 'مهامه — تلقائية من السيستم' : 'مهامي — تلقائية من السيستم', auto.length ? auto.map(autoRow) : isAdminView() ? K.Empty('مفيش حاجة مستنياه', '') : K.Empty('مفيش حاجة مستنياك', 'المراجعات والطلبات والأوردرات اللي محتاجاك بتظهر هنا لوحدها.'), fresh ? [fresh] : null, { th: false }),
+      h('p', { class: 't-small help', 'data-tasks-note': '' }, 'مفيش مهام بالإيد — أي شغل لحد تاني بيبقى «طلب» من «طلبات الفريق».')];
+  }
+  function taskRow(t, w) {
+    const wrap = h('div', { class: 'pop-anchor', 'data-popover-root': '' });
+    const btn = h('button', { type: 'button', class: 'tstat-btn', 'aria-haspopup': 'listbox', 'aria-label': 'حالة المهمة: ' + t.status, disabled: w ? false : '' }, K.Tag(T_TONE[t.status], t.status), w ? Icon('chevD', 'sm') : null);
+    if (w) { const pop = U.popover(wrap, btn, (close) => U.DropdownMenu({ options: O.TASK_STATUSES.map((s) => ({ value: s, label: s + ' · ' + T_EN[s] })), value: t.status, onSelect: (v) => { close(); changeStatus(t, v); } })); btn.addEventListener('click', pop.toggle); }
+    wrap.append(btn);
+    const meta = [t.status === 'متوقفة' && t.reason ? 'السبب: ' + t.reason : t.status === 'جاهزة للمراجعة' ? 'المراجع: ' + (t.reviewer || '—') : t.status === 'اتأجلت' ? (t.until ? 'لـ ' + K.dshort(t.until) : 'لأجل غير مسمى')
+      : t.status === 'جاري' && t.reviewNote ? 'رجعت من ' + (t.reviewer || 'المراجع') + ': ' + t.reviewNote : t.status === 'خلصت' && t.reviewer ? 'اتراجعت من ' + t.reviewer : '',
+    t.byUid && t.byUid !== t.memberUid && t.by ? 'من ' + t.by : ''].filter(Boolean).join(' · ');
+    const del = IH() && IH().canDeleteTask && IH().canDeleteTask(t);
+    return h('div', { class: 'task' + (t.status === 'خلصت' ? ' done' : ''), 'data-task': String(t.id) }, K.Checkbox({ label: '', checked: t.status === 'خلصت', disabled: !w, onChange: (v) => changeStatus(t, v ? 'خلصت' : 'لسه') }),
+      h('span', { class: 'grow' }, t.title, meta ? h('small', { class: 't-small help' }, ' · ' + meta) : null), wrap,
+      del ? K.RowMenu([{ label: 'حذف', icon: 'close', danger: true, run: () => { IH().taskDelete(t.id).then(failed); rerender(); } }], 'إجراءات ' + t.title) : null);
+  }
+  // ---------- طلباتي (the owner 11 Nov — «هنضيف هنا طلباتي بعد مهامي»): the team requests («طلبات الفريق», IBTickets) this member opened,
+  // every type (a customer / maker problem, the HR requests of decision 33, a special request); open first, a click opens the request ----------
+  const REQ_ST = { open: 'مفتوح', in_progress: 'جاري العمل', waiting: 'بانتظار الرد', resolved: 'تم الحل', closed: 'مغلق' };
+  // owner batch 2 decision 5: «مطلوبة مني» (assigned to my role or to me — decision 32) and «طلباتي» (what I opened), each with the
+  // number of its open requests (2026-11-15-comments.md decision 3), and «الكل» (decision 7 there). The «نظرة عامة» cards above the
+  // list were removed by the owner (the same plan, decision 2).
+  function requestsTab(m) {
+    const TA = window.IBTickets; const TK = window.IbtekrTickets;
+    if (!TA || !TA.can || !TA.can().view) return [K.Section(label('requests'), K.Empty('الطلبات مش متاحة ليك', 'طلبات الفريق محتاجة صلاحية «طلبات الفريق».'))];
+    const ready = TA.state && TA.state() === 'ready'; const all = ready ? TA.all() : [];
+    const self = !isAdminView();
+    const forMember = (t) => (self && TA.isMine ? TA.isMine(t) : t.assigneeMember ? t.assigneeMember === m.uid : (TA.membersOf ? TA.membersOf(t.assigneeRole) : []).some((x) => x.uid === m.uid));
+    const recent = (a, b) => (String(a.lastUpdate || a.createdAt) < String(b.lastUpdate || b.createdAt) ? 1 : -1);
+    const forMe = all.filter(forMember).sort(recent);
+    const opened = all.filter((t) => t.createdBy && t.createdBy.uid && t.createdBy.uid === m.uid).sort(recent);
+    // the owner 15 Nov (2026-11-15-comments.md decision 7 — «وحدهم خليهم يبقوا - مطلوبة مني - طلباتي - الكل»): one row of three tabs —
+    // «مطلوبة مني» and «طلباتي» show the open requests (their count), «الكل» every request of the two, open or closed; the
+    // «المفتوحة / الكل» row under them is gone
+    const tab = st.reqTab === 'mine' ? 'mine' : st.reqTab === 'all' ? 'all' : 'forme';
+    const isOpen = (t) => ['open', 'in_progress', 'waiting'].includes(t.status);
+    const both = forMe.concat(opened.filter((t) => !forMe.includes(t))).sort(recent);
+    const list = tab === 'mine' ? opened.filter(isOpen) : tab === 'all' ? both : forMe.filter(isOpen);
+    const typeOf = (t) => (TK ? TK.label(TK.TYPES, t.type) : t.type);
+    const who = (t) => (t.assigneeMemberName ? t.assigneeRole + ' — ' + t.assigneeMemberName : t.assigneeRole || '—');
+    const by = (t) => (t.createdBy && t.createdBy.name) || '—';
+    const go = (t) => { location.hash = 'tickets/' + t.id; };
+    const cells = (t) => [K.Num(t.id), t.title, typeOf(t), U.TicketStatus ? U.TicketStatus(t.status) : (REQ_ST[t.status] || t.status)].concat(tab === 'mine' ? [who(t)] : tab === 'all' ? [by(t), who(t)] : [by(t)], [K.Num(String(t.lastUpdate || t.createdAt || '').slice(0, 10))]);
+    const heads = ['الرقم', 'العنوان', 'النوع', 'الحالة'].concat(tab === 'mine' ? ['المسؤول'] : tab === 'all' ? ['فتحها', 'المسؤول'] : ['فتحها'], ['آخر تحديث']);
+    const row = (t) => { const tr = h('tr', { 'data-my-req': t.id, tabindex: '0', role: 'button', 'aria-label': 'افتح الطلب ' + t.id }, cells(t).map((c) => h('td', null, c)));
+      tr.addEventListener('click', () => go(t)); tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(t); } }); return tr; };
+    const fresh = window.IbtekrApp && window.IbtekrApp.newTicket && self ? Button({ type: 'brand', size: 'sm', icon: 'plus', label: 'فتح طلب', onClick: () => window.IbtekrApp.newTicket() }) : null;
+    const mineName = self ? 'طلباتي' : 'طلباته'; const forName = self ? 'مطلوبة مني' : 'مطلوبة منه';
+    const title = tab === 'mine' ? mineName : tab === 'all' ? 'كل الطلبات' : forName;
+    const sub = tab === 'mine' ? 'المفتوح من اللي اتفتح على «طلبات الفريق» — اضغط على أي طلب يفتحه' : tab === 'all' ? 'المطلوبة ' + (self ? 'منك' : 'منه') + ' واللي ' + (self ? 'فتحتها' : 'فتحها') + '، المفتوح والمقفول — اضغط على أي طلب يفتحه'
+      : 'المفتوح من اللي المسؤول عنه ' + (self ? 'دورك أو إنت' : 'دوره أو هو') + ' — اضغط على أي طلب يفتحه';
+    const empty = tab === 'mine' ? K.Empty('مفيش طلبات مفتوحة', opened.length ? 'كل ' + (self ? 'طلباتك' : 'طلباته') + ' اتحلت أو اتقفلت — هتلاقيها في «الكل».' : 'الطلبات اللي بتتفتح على «طلبات الفريق» بتظهر هنا.')
+      : tab === 'all' ? K.Empty('لسه مفيش طلبات', 'أي طلب ' + (self ? 'عليك أو فتحته' : 'عليه أو فتحه') + ' بيظهر هنا.')
+        : K.Empty('مفيش طلبات مفتوحة', 'مفيش طلبات على ' + (self ? 'دورك أو عليك' : 'دوره أو عليه') + ' مستنية دلوقتي.');
+    return [K.MainTabs({ items: [{ id: 'forme', label: forName, count: forMe.filter(isOpen).length }, { id: 'mine', label: mineName, count: opened.filter(isOpen).length }, { id: 'all', label: 'الكل', count: both.length }], active: tab, onChange: (id) => { st.reqTab = id; rerender(); }, label: 'الطلبات' }),
+      K.TableSection({ title, sub, actions: fresh,
+        body: !ready ? K.Empty('بنجيب الطلبات…', 'لحظة.') : list.length ? h('div', { class: 'scroll-x' }, h('table', null, h('thead', null, h('tr', null, heads.map((x) => h('th', { scope: 'col' }, x)))), h('tbody', null, list.map(row)))) : empty })];
+  }
+  document.addEventListener('ib:tickets', () => { if (window.IBPages.current === 'profile' && st.tab === 'requests' && !typing()) rerender(); });
+
+  // «مين هيراجع»: the active team (hr_task_people) but the task's own member; the member's direct manager first
+  function reviewers(t) {
+    const P = IH() ? IH().people() : []; const owner = HM(t.member) || {}; const mgr = owner.manager ? HM(owner.manager) : null;
+    const l = P.filter((p) => p.uid !== t.memberUid); const first = mgr && l.find((p) => p.code === mgr.id);
+    return { list: first ? [first].concat(l.filter((p) => p !== first)) : l, def: first ? first.uid : '' };
+  }
+  function changeStatus(t, s) {
+    if (s === 'متوقفة' || s === 'جاهزة للمراجعة' || s === 'اتأجلت') {
+      const R = s === 'جاهزة للمراجعة' ? reviewers(t) : { list: [], def: '' };
+      return K.form({ title: s === 'متوقفة' ? 'وقّف المهمة' : s === 'جاهزة للمراجعة' ? 'جاهزة للمراجعة' : 'أجّل المهمة', values: { reviewer: R.def, when: 'day', until: O.addDays(tdy(), 1) }, note: h('b', null, t.title),
+        fields: (f, e, set) => s === 'متوقفة' ? [K.field.area('reason', 'سبب التوقف', f, e, set, { required: true })] : s === 'جاهزة للمراجعة' ? [K.field.select('reviewer', 'مين هيراجع', R.list.map((p) => ({ value: p.uid, label: p.name })), f, e, set, { required: true, help: 'هتظهر عنده مهمة تلقائية' })]
+          : [K.Radios({ label: 'لإمتى', value: f.when, onChange: (v) => set('when', v, true), options: [{ value: 'day', label: 'ليوم معين — تظهر تلقائي في اليوم ده' }, { value: 'never', label: 'لأجل غير مسمى — تتحط في «المؤجل»' }] }), f.when === 'day' ? K.field.date('until', 'اليوم', f, e, set, { required: true, today: tdy() }) : null],
+        validate: (f) => { const err = O.validateTaskStatus(s, { reason: f.reason, reviewer: f.reviewer, until: f.when === 'day' ? f.until : null, indefinite: f.when === 'never' }) || (s === 'اتأجلت' && f.when === 'day' && f.until < tdy() ? 'اختار يوم من النهارده أو بعده' : null); if (!err) return {}; return { [s === 'متوقفة' ? 'reason' : s === 'جاهزة للمراجعة' ? 'reviewer' : 'until']: err }; },
+        submitLabel: 'حفظ', submit: (f) => { const p = IH().taskSet(t.id, s, { reason: f.reason, reviewer: f.reviewer, until: f.when === 'day' ? f.until : null, indefinite: f.when === 'never' }); K.toast('المهمة بقت «' + s + '»'); rerender(); p.then(failed); } });
+    }
+    const p = IH().taskSet(t.id, s); rerender(); p.then(failed);
+  }
+  // the reviewer: «تمام — خلصت» or «رجّعها» with a note the owner reads
+  function review(t) {
+    K.form({ title: 'مراجعة مهمة', note: h('div', null, h('b', null, t.title), h('div', { class: 't-small help' }, 'من ' + (t.memberName || '—'))), values: { decision: 'ok', note: '' },
+      fields: (f, e, set) => [K.Radios({ label: 'المراجعة', value: f.decision, onChange: (v) => set('decision', v, true), options: [{ value: 'ok', label: 'تمام — خلصت' }, { value: 'back', label: 'رجّعها — محتاجة تعديل' }] }),
+        f.decision === 'back' ? K.field.area('note', 'ملاحظتك', f, e, set, { required: true, help: 'هتظهر عند ' + (t.memberName || 'صاحب المهمة') }) : null],
+      validate: (f) => (f.decision === 'back' && !String(f.note || '').trim() ? { note: 'اكتب ملاحظتك' } : {}),
+      submitLabel: 'حفظ', submit: (f, mo) => { IH().taskReview(t.id, f.decision === 'ok', f.note).then((r) => { if (!r.ok) return failed(r); mo.close(); K.toast(f.decision === 'ok' ? 'المهمة خلصت' : 'رجعت لـ ' + (t.memberName || 'صاحبها'), 'success'); if (window.IBPages.current === 'profile') rerender(); }); return false; } });
+  }
+  // the auto tasks read the tickets and the orders too
+  ['ib:tickets', 'ib:orders-ready'].forEach((ev) => document.addEventListener(ev, () => { if (window.IBPages.current === 'profile' && (st.tab === 'tasks' || st.tab === 'overview') && !typing()) rerender(); }));
+  // decision 26: «تنبيهاتي» follows the bell (new alerts, the tickets, the orders, the team's requests)
+  ['ib:notify', 'ib:tickets', 'ib:orders-ready', 'ib:hr', 'ib:cs'].forEach((ev) => document.addEventListener(ev, () => { if (window.IBPages.current === 'profile' && (st.tab === 'alerts' || st.tab === 'overview') && !typing()) rerender(); }));
+
+  // ---------- ساعات العمل (this month's days from the server's attendance) ----------
+  function hours(m) {
+    const D = HD(); const mk = thisMonth(); const mon = monName(mk); const who = m.name; const t = tdy();
+    const att = D.attendance.filter((a) => a.member === m.id && a.date.startsWith(mk) && a.in != null).sort((x, y) => (x.date < y.date ? 1 : -1));
+    // decision 24: a day = its sessions summed (the open one counts once it ends); no lateness — flexible hours
+    const hrsOf = (a) => Number(a.mins) || 0; const worked = att.reduce((s, a) => s + hrsOf(a), 0);
+    const nSess = att.reduce((n, a) => n + ((a.sessions && a.sessions.length) || 1), 0);
+    const ot = D.overtime.filter((o) => o.member === m.id).sort((x, y) => (x.date < y.date ? 1 : -1));
+    const otOk = ot.filter((o) => o.status === 'اتضاف' && o.kind !== 'rest_day' && o.date.startsWith(mk)); const otPend = ot.filter((o) => o.status === 'مستني');
+    const sh = !isAdminView() && window.IBShell ? window.IBShell.state() : null;
+    const okMin = otOk.reduce((x, o) => x + o.paid, 0);
+    const outTxt = (a) => (a.out != null ? K.t12(a.out) : a.date === t ? 'لسه شغال' : 'ناقص'); // decision 9: clock times on the 12-hour clock
+    const sessTxt = (a) => (a.sessions && a.sessions.length > 1 ? a.sessions.length + ' جلسات' : 'جلسة');
+    const attRow = (a) => [K.dayName(a.date) + ' ' + K.dshort(a.date), K.t12(a.in), outTxt(a), hrsOf(a) || a.out != null ? K.hm(hrsOf(a)) : '—', sessTxt(a)];
+    const otTag = (o) => K.Tag(o.status === 'مستني' ? 'orange' : o.status === 'اتضاف' ? 'success' : 'error', o.status === 'اتضاف' ? 'اتضاف ' + (o.kind === 'rest_day' ? 'يوم × 2' : K.hrs(o.paid)) : o.status === 'مستني' ? 'مستني تأكيد' : o.status);
+    const dToday = () => ({ title: 'النهارده — ' + who, sub: sh ? (sh.state === 'out' ? (sh.ended ? 'خلص الدوام النهارده' : 'خارج الدوام دلوقتي') : 'الدوام شغال من ' + sh.startLabel) : 'حالته النهارده: ' + HR().status(m)[0], summary: [{ label: 'الحالة', value: !sh ? HR().status(m)[0] : sh.state === 'out' ? (sh.ended ? 'خلص الدوام' : 'خارج الدوام') : sh.state === 'overtime' ? 'وقت إضافي' : 'في الدوام' }, { label: 'اشتغلت', value: sh && sh.state !== 'out' ? K.hm(sh.worked) + ' ساعة' : sh && sh.ended ? K.hm(sh.endedMin) + ' ساعة' : '—' }, { label: 'بداية الدوام', value: sh && sh.startLabel || '—' }], headers: [], rows: [], note: 'الدوام مرن: تقدر تبدأ وتنهي أكتر من مرة في اليوم، والساعات = مجموع الجلسات من «ابدأ الدوام» لحد «إنهاء الدوام» على ساعة السيرفر.', source: 'تسجيل الدوام' });
+    const dMonth = () => ({ title: 'ساعات ' + mon + ' — ' + who, sub: att.length + ' يوم حضور', summary: [{ label: 'إجمالي الساعات', value: K.hm(worked) }, { label: 'أيام', value: String(att.length) }, { label: 'متوسط اليوم', value: att.length ? K.hm(worked / att.length) : '—' }], headers: ['اليوم', 'أول حضور', 'آخر انصراف', 'الساعات', 'الجلسات'], rows: att.map(attRow), source: 'سجل الحضور' });
+    const sessRows = att.flatMap((a) => (a.sessions || []).map((x, i) => [K.dayName(a.date) + ' ' + K.dshort(a.date), String(i + 1), K.t12(x.in), x.out != null ? K.t12(x.out) : a.date === t ? 'لسه شغال' : 'ناقص', x.out != null ? K.hm(Math.max(0, x.out - x.in)) : '—']));
+    const dSess = () => ({ title: 'جلسات الدوام — ' + who, sub: nSess + ' جلسة في ' + mon + ' · الدوام مرن ومفيش تأخير', summary: [{ label: 'جلسات', value: String(nSess) }, { label: 'أيام', value: String(att.length) }], headers: ['اليوم', 'الجلسة', 'من', 'لحد', 'المدة'], rows: sessRows, empty: 'لسه مفيش جلسات الشهر ده.', source: 'سجل الحضور' });
+    const dOt = () => ({ title: 'الوقت الإضافي — ' + who, sub: otOk.length + ' متأكد في ' + mon + ' · ' + otPend.length + ' مستني تأكيد', summary: [{ label: 'متأكد', value: K.hm(okMin) + ' ساعة' }, { label: 'مستني', value: String(otPend.length) }], headers: ['اليوم', 'المدة', 'المحسوب', 'اشتغلت على إيه', 'الحالة'], rows: ot.map((o) => [K.dshort(o.date), o.kind === 'rest_day' ? 'يوم راحة' : K.hrs(o.minutes), o.status === 'اتضاف' ? (o.kind === 'rest_day' ? 'يوم × 2' : K.hrs(o.paid)) : '—', o.note || '—', o.status]), empty: 'مفيش وقت إضافي مسجّل.', note: 'الوقت الإضافي بيتحسب بس بعد ما المدير يأكده.', source: 'الوقت الإضافي' });
+    const now = sh && sh.state !== 'out' ? K.hm(sh.worked) : sh && sh.ended ? K.hm(sh.endedMin) : '—';
+    // decision 24: «ابدأ الدوام» again after «إنهاء الدوام» (from the header clock) — another session, the hours summed
+    // decision 25: «إضافة وقت إضافي» (overtime from now, through the request ticket), under «إجراءات سريعة»; decision 31 (owner 10 Nov —
+    // «امسح زرار إنهاء الدوام»): it is the only quick action here — the shift starts and ends from the header clock
+    const btn = !isAdminView() && sh && sh.state === 'in' && window.IBShell.startOvertime ? [Button({ label: 'إضافة وقت إضافي', icon: 'plus', attrs: { 'data-ot-start': '' }, onClick: () => K.confirm({ title: 'إضافة وقت إضافي', text: 'الوقت الإضافي هيبدأ من دلوقتي، وهيتبعت طلب في «طلبات الفريق» لمديرك المباشر — ومابيتحسبش غير بعد موافقته.', okLabel: 'ابدأ وقت إضافي', onOk: () => window.IBShell.startOvertime() }) })] : null;
+    return [h('div', { class: 'cards' }, K.Stat('النهارده', now, '', sh ? (sh.state === 'out' ? (sh.ended ? 'خلص الدوام' : 'خارج الدوام') : 'من ' + sh.startLabel) : HR().status(m)[0], undefined, dToday), K.Stat('ساعات ' + mon, K.hm(worked), 'ساعة', att.length + ' يوم حضور', undefined, dMonth), K.Stat('جلسات الدوام', nSess, 'جلسة', 'الدوام مرن — ' + mon, undefined, dSess), K.Stat('وقت إضافي متأكد', K.hm(okMin), 'ساعة', otPend.length + ' مستني تأكيد', undefined, dOt)),
+      btn ? h('div', { class: 'toolbar quick-acts' }, h('span', { class: 't-label help' }, 'إجراءات سريعة:'), ...btn) : null,
+      K.Section('سجل الحضور — ' + monLabel(mk), att.length ? U.Table({ headers: ['اليوم', 'أول حضور', 'آخر انصراف', 'الساعات', 'الجلسات', 'وقت إضافي'], rows: att.map((a) => [K.dayName(a.date) + ' ' + K.dshort(a.date), K.Num(K.hm(a.in)), a.out != null ? K.Num(K.hm(a.out)) : a.date === t ? K.Tag('success', 'لسه شغال') : K.Tag('error', 'ناقص'), hrsOf(a) || a.out != null ? K.Num(K.hm(hrsOf(a))) : '—', sessTxt(a), a.ot ? K.Tag('gold', K.hrs(a.ot)) : '—']) }) : K.Empty('لسه مفيش حضور الشهر ده', isAdminView() ? '' : '«ابدأ الدوام» من فوق بيسجّل اليوم.'), null, { when: monLabel(mk) }),
+      ot.length ? K.Section('الوقت الإضافي', U.Table({ headers: ['اليوم', 'المدة', 'اشتغلت على إيه', 'الحالة', 'الطلب'], rows: ot.map((o) => [K.dshort(o.date), o.kind === 'rest_day' ? 'يوم راحة' : K.hrs(o.minutes), h('span', { class: 'wrap' }, o.note || '—'), otTag(o), o.ticket ? h('a', { href: '#tickets/' + o.ticket, class: 'num' }, o.ticket) : '—']) }), null, { noun: ['طلب', 'الطلبات'] }) : null];
+  }
+  // ---------- what waits for me (decision 33: the requests are decided in their team tickets; «طلباتي» tab removed) ----------
+  // what waits for me: the pending requests and overtime of others that RLS shows me (my team; the server decides who may decide)
+  function needFromMe() { const D = HD(); const isP = HR().isPending; return D.requests.filter((r) => r.member !== K.ME && isP(r)).map((r) => ({ kind: 'req', r })).concat(D.overtime.filter((o) => o.member !== K.ME && o.status === 'مستني' && (!IH() || IH().decidesOt(o))).map((o) => ({ kind: 'ot', o }))); }
+  // ---------- أدائي (the HR rebuild, 0083 — decision 2): the quarter picked, month by month out of 5 — the attendance automatic, the
+  // performance and the communication from the manager, the month = the three's average, the quarter = its rated months'; the bonus of a
+  // month whole when it reaches the setting's bar (the money for sensitive.salaries / my own)
+  function performance(m) {
+    const D = HD(); const ev = (D.evals || {})[m.id] || {}; const bar = Number((D.hrSettings || {}).bonusMin) || 3;
+    const cur = qOf(thisMonth()); const quarters = [...new Set([cur].concat(Object.keys(ev).filter((k) => ev[k] && ev[k].total != null).map(qOf)))].sort().reverse();
+    const q = st.perfQ && quarters.includes(st.perfQ) ? st.perfQ : cur; const months = qMonths(q);
+    const Q = IH() && IH().quarterEval ? IH().quarterEval(m.id, q) : null; const last = lastScore(m.id);
+    const money = seesMoney(m); const hb = m.holdback || 0; const earned = months.filter((k) => ev[k] && ev[k].total != null && ev[k].total >= bar).length;
+    const sc = (v) => (v == null ? '—' : K.Num(of5(v)));
+    const pickQ = U.Select({ id: 'pf-q', label: '', options: quarters.map((x) => ({ value: x, label: qLabel(x) })), value: q, onChange: (v) => { st.perfQ = v; rerender(); } });
+    const rows = months.map((k) => { const x = ev[k] || {}; return [monName(k), sc(x.att), sc(x.perf), sc(x.comm), x.total == null ? K.Tag('neutral', 'لسه') : K.Tag(x.total >= 4 ? 'success' : x.total >= 3 ? 'info' : 'error', of5(x.total)),
+      x.total == null ? '—' : x.total >= bar ? K.Tag('success', 'هيتصرف') : K.Tag('error', 'مش هيتصرف'), h('span', { class: 't-small wrap' }, x.note || '—')]; });
+    return [h('div', { class: 'toolbar' }, pickQ),
+      h('div', { class: 'cards', 'data-pf-cards': '' }, K.Stat(last ? 'تقييم ' + monName(last.k) : 'تقييم الشهر', last ? of5(last.v) : '—', '', last ? 'آخر شهر اتقيّم' : 'لسه مااتقيّمش'),
+        K.Stat('التقييم الربع سنوي', Q && Q.total != null ? of5(Q.total) : '—', qShort(q), Q ? Q.rated + ' من 3 شهور اتقيّمت' : '—'),
+        K.Stat('البونص — ' + qShort(q), money ? K.money(hb * earned) : '••••', money ? 'ج.م' : '', earned + ' من 3 شهور وصلت ' + bar + ' من 5')),
+      K.Section('التقييم الشهري — ' + qLabel(q), U.Table({ cls: 'pf-evals', headers: ['الشهر', 'الحضور', 'الأداء', 'التواصل', 'تقييم الشهر', 'البونص', 'ملاحظة'], rows }), null,
+        { when: qLabel(q), sub: 'الحضور تلقائي من أيام الحضور · الأداء (حسب المهام) والتواصل من المدير المباشر · تقييم الشهر = متوسط التلاتة · البونص: الشهر اللي تقييمه ' + bar + ' من 5 أو أكتر محجوزه بيتصرف كامل آخر الربع' }),
+      notesSec(m)];
+  }
+  // owner batch 14 Nov decision 13 (0089): what the manager sent about the evaluation — a meeting, a warning, an improvement plan, a thanks
+  // (IBHR.data.noteLog: mine, or the members I see); the newest first
+  const cairo = (iso, loc, o) => { try { return new Intl.DateTimeFormat(loc, Object.assign({ timeZone: 'Africa/Cairo' }, o)).format(new Date(iso)); } catch (e) { return String(iso).slice(0, 10); } };
+  function notesSec(m) {
+    const list = ((HD().noteLog) || []).filter((x) => x.member === m.id); if (!list.length) return null;
+    const KIND = { meeting: ['ميتنج فردي', 'info'], warning: ['إنذار', 'error'], plan: ['خطة تحسين', 'orange'], thanks: ['شكر', 'success'] };
+    const per = (p) => (/Q/.test(p) ? qLabel(p) : monLabel(p)); const day = (x) => (x ? K.dshort(cairo(x, 'en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' })) : '—');
+    const time = (x) => K.t12(cairo(x, 'en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })); // decision 9: the 12-hour clock
+    const rows = list.map((x) => [K.Tag((KIND[x.kind] || [x.kind, 'neutral'])[1], (KIND[x.kind] || [x.kind])[0]), per(x.period), h('span', { class: 't-small wrap' }, x.body || '—'),
+      x.due ? (x.kind === 'meeting' ? 'الميعاد ' + day(x.due) + ' الساعة ' + time(x.due) : 'المراجعة ' + day(x.due)) : '—', x.by || '—', day(x.at)]);
+    return K.Section('من المدير — ميتنج · إنذار · خطة تحسين · شكر', U.Table({ cls: 'pf-notes', headers: ['النوع', 'عن تقييم', 'التفاصيل', 'الميعاد', 'من', 'التاريخ'], rows }), null,
+      { noun: ['ملاحظة', 'الملاحظات'], sub: 'اللي بعته المدير المباشر أو الموارد البشرية على التقييم' });
+  }
+  // ---------- مرتبي (decision 2: my own payslips once the sheet is approved; another member's for sensitive.salaries) ----------
+  function salary(m) {
+    if (!seesMoney(m)) return [K.Section('', K.Empty('المرتبات للأدمن بس', 'كل عضو بيشوف قسيمته هو بس في «ملفي».'))];
+    if (!(m.salary > 0)) return [K.Section('', K.Empty('مفيش مرتب مسجل', 'المرتب بيتسجل من الموارد البشرية.'))];
+    const C = slipsOf(m); const list = C.list; const p = list[0] || null; const show = st.showPay || isAdminView(); const v = (n) => (show ? K.money(n) : '••••'); const rt = O.rates(m.salary); const mk = thisMonth();
+    const stTag = (s) => K.Tag(s === 'مدفوع' ? 'success' : s === 'معتمد' ? 'info' : 'orange', s === 'مدفوع' ? 'اتصرف' : s === 'معتمد' ? 'اتعتمد' : s);
+    const dNet = () => ({ title: 'صافي ' + monName(p.month) + ' — ' + m.name, sub: 'القسيمة: ' + (p.status === 'مدفوع' ? 'اتصرفت' : 'اتعتمدت') + (show ? '' : ' · المبالغ مخفية — اضغط «إظهار»'), summary: [{ label: 'الصافي', value: v(p.net) + ' ج.م' }], headers: ['البند', 'المبلغ'], rows: [['المرتب بعد الحافز المحجوز', v(p.paid)], ['وقت إضافي (' + K.hrs(p.otMin) + ')', v(p.otPay)], ['أيام راحة اشتغلها (' + p.rest + ')', v(p.restPay)], ['بدلات ومكافآت', v(p.allow)], ['خصومات', p.ded ? '−' + v(p.ded) : v(0)], ['سُلف', p.advance ? '−' + v(p.advance) : v(0)], ['إجازة بدون أجر', p.unpaidCut ? '−' + v(p.unpaidCut) : v(0)], ['حافز الربع', v(p.quarterBonus)], ['الصافي', v(p.net)]], source: 'كشف مرتبات ' + monLabel(p.month) });
+    const qm = qMonths(qOf(mk));
+    const dHold = () => ({ title: 'الحافز المحجوز — ' + m.name, sub: 'بيتحجز كل شهر وبيتصرف آخر الربع بنسبة السكور', summary: [{ label: 'محجوز الشهر', value: v(m.holdback) + ' ج.م' }, { label: 'محجوز ' + qShort(qOf(mk)), value: v(m.holdback * 3) + ' ج.م' }], headers: ['البند', 'القيمة'], rows: qm.map((k) => [monName(k), v(m.holdback) + (k < mk ? ' — اتحجز' : k === mk ? ' — بيتحدد بتقييم ' + monName(k) : ' — لسه')]).concat([['ميعاد الصرف', monLabel(qm[2]) + ' مع حافز الربع']]), note: 'الشهر اللي سكوره أقل من 70% حافزه 0.', source: 'سياسة الحوافز' });
+    const otNow = Math.round((m.otMonth || 0) / 60 * rt.hourly);
+    const rows = list.map((s) => [monLabel(s.month), K.Num(v(s.net)), stTag(s.status), Button({ type: 'text', size: 'sm', label: 'عرض', disabled: !show, onClick: () => HR().slipModal(s, s.month, s.status) })]);
+    const open = isAdminView() && can().salaries && !list.some((s) => s.month === mk) ? [[monLabel(mk) + ' (الشهر المفتوح)', '—', stTag((HD().sheets[mk] || {}).status || 'مسودة'), Button({ type: 'text', size: 'sm', label: 'عرض', onClick: () => HR().payslipModal(m) })]] : [];
+    return [h('div', { class: 'toolbar' }, !isAdminView() ? Button({ label: show ? 'إخفاء المبالغ' : 'إظهار', attrs: { 'aria-pressed': String(show) }, onClick: () => { st.showPay = !st.showPay; rerender(); } }) : null),
+      // details respect «إظهار»: amounts stay masked (••••) until shown.
+      h('div', { class: 'cards' }, K.Stat(p ? 'صافي ' + monName(p.month) : 'آخر قسيمة', p ? v(p.net) : '—', p ? 'ج.م' : '', p ? (p.status === 'مدفوع' ? 'اتصرف' : 'اتعتمد — لسه ما اتصرفش') : C.status === 'loading' ? 'بيحمّل…' : 'بتظهر بعد اعتماد الكشف', undefined, p ? dNet : undefined),
+        K.Stat('الحافز المحجوز الشهر ده', v(m.holdback), 'ج.م', 'بيتحدد بتقييم ' + monName(mk) + ' · يتصرف ' + monName(qm[2]), undefined, dHold),
+        K.Stat('اليومية', v(rt.daily), 'ج.م', undefined, undefined, () => ({ title: 'اليومية — ' + m.name, summary: [{ label: 'اليومية', value: v(rt.daily) + ' ج.م' }], headers: ['البند', 'القيمة'], rows: [['المرتب الأساسي', v(m.salary)], ['أيام الشغل في الشهر', String(O.HR.workDays)], ['اليومية = المرتب ÷ أيام الشغل', v(rt.daily)], ['يوم راحة اشتغلته', v(O.overtimePay(m.salary, { offDays: 1 })) + ' (يومية × 2)']], source: 'إعدادات الموارد البشرية' })),
+        K.Stat('سعر الساعة', v(rt.hourly), 'ج.م', 'نفس سعر الوقت الإضافي', undefined, () => ({ title: 'سعر الساعة — ' + m.name, summary: [{ label: 'سعر الساعة', value: v(rt.hourly) + ' ج.م' }], headers: ['البند', 'القيمة'], rows: [['اليومية', v(rt.daily)], ['ساعات الوردية', String(O.HR.shiftHours)], ['سعر الساعة = اليومية ÷ ساعات الوردية', v(rt.hourly)], ['الوقت الإضافي المتأكد الشهر ده', K.hrs(m.otMonth || 0) + ' = ' + v(otNow)]], source: 'إعدادات الموارد البشرية' }))),
+      C.status === 'error' ? U.InlineNote({ kind: 'error', children: 'معرفناش نجيب القسايم — جرّب تاني كمان شوية.' }) : null,
+      K.Section('القسايم', rows.length || open.length ? U.Table({ headers: ['الشهر', 'الصافي', 'الحالة', ''], rows: open.concat(rows) }) : K.Empty(C.status === 'loading' ? 'بيحمّل القسايم…' : 'لسه مفيش قسايم', 'القسيمة بتظهر هنا بعد ما كشف الشهر يتعتمد.'))];
+  }
+  // ---------- مستندات وعقود (inside «بيانات الحساب», decision 39 — the member's documents in «hr-docs»: hr.edit F uploads, the member reads their own) ----------
+  function docs(m) {
+    const edit = can().edit; const list = (m.docs || []).slice().sort((a, b) => (a.at < b.at ? 1 : -1)); const contract = list.find((d) => d.kind === 'عقد عمل') || null;
+    const openDoc = (d) => { if (!d) return; IH().fileUrl(d.path).then((u) => { if (!u) { K.toast('معرفناش نفتح الملف — جرّب تاني', 'error'); return; } window.open(u, '_blank', 'noopener'); }); };
+    const sub = !contract ? 'لسه ما اترفعش' : m.contractEnd ? (m.contract === 'expiring' ? 'بيخلص ' : 'ساري لحد ') + K.dlabel(m.contractEnd) : 'اترفع ' + K.dlabel(String(contract.at || '').slice(0, 10));
+    const others = list.filter((d) => d !== contract);
+    return [K.Section('مستندات وعقود', [U.ContractCard({ status: m.contract || 'missing', title: 'عقد العمل', sub, canManage: edit, onView: () => openDoc(contract), onDownload: () => openDoc(contract), onUpload: () => HR().uploadContract(m), onTemplate: () => K.toast('قالب العقد لسه مااترفعش — اطلبه من الأدمن', 'info') }),
+      others.length ? U.Table({ headers: ['المستند', 'الملف', 'من', 'لحد', ''], rows: others.map((d) => [d.kind, h('span', { class: 'wrap' }, d.name), d.start ? K.dshort(d.start) : '—', d.end ? K.dshort(d.end) : '—', Button({ type: 'text', size: 'sm', label: 'عرض', onClick: () => openDoc(d) })]) }) : h('div', { class: 't-small help' }, 'مفيش مستندات تانية.')], edit ? [Button({ label: 'رفع مستند', icon: 'attach', onClick: () => HR().uploadContract(m) })] : null)];
+  }
+  // ---------- بيانات الحساب (decision 39): البيانات الشخصية · الرقم السري · رقم الحساب البنكي · مستندات وعقود ----------
+  function security(m) {
+    const ad = isAdminView();
+    const personal = K.Section('البيانات الشخصية', K.Kv([['الاسم', m.name || '—'], ['الإيميل', m.email || '—'], ['الموبايل', m.phone ? h('span', { dir: 'ltr' }, m.phone) : '—'],
+      ['المسمى الوظيفي', m.title || '—'], ['الدور', m.role || '—'], ['المدير المباشر', m.manager ? HM(m.manager).name + (m.managerFixed ? '' : ' (مدير الدور)') : '—']]), ad ? null : [Button({ label: 'تعديل بياناتي', onClick: () => editInfo(m) })]);
+    const pass = K.Section('الرقم السري', [ad ? null : h('div', { class: 'set-row' }, h('div', null, h('b', null, 'كلمة المرور'), h('div', { class: 't-small help' }, '8 حروف على الأقل فيها حرف ورقم')), Button({ type: 'primary', label: 'تغيير كلمة المرور', onClick: () => changePassword() })),
+      h('div', { class: 'set-row' }, h('div', null, h('h3', { class: 't-label', style: 'margin:0' }, 'التحقق بخطوتين'), h('b', null, m.twofa ? 'مفعّل — تطبيق Authenticator' : 'مش مفعّل'), h('div', { class: 't-small help' }, ad ? 'العضو بيفعّله أو يوقفه من ملفه' : 'اختياري للكل · تطبيق Authenticator (واتساب وإيميل ' + SOON_2FA + ')')), ad ? null : m.twofa ? Button({ label: 'إيقاف', onClick: () => K.confirm({ title: 'إيقاف التحقق بخطوتين', text: 'حسابك هيبقى محمي بكلمة المرور بس.', okType: 'danger', okLabel: 'إيقاف', onOk: disable2fa }) }) : Button({ type: 'primary', label: 'تفعيل', onClick: () => enable2fa(m) })),
+      ad ? null : h('div', { class: 'set-row' }, h('div', null, h('b', null, 'الأجهزة'), h('div', { class: 't-small help' }, 'لو حاسس إن حد تاني داخل بحسابك: غيّر كلمة المرور أو اعمل خروج من كل الأجهزة — الجهاز ده بيفضل داخل.')), Button({ label: 'خروج من كل الأجهزة', onClick: () => window.IBShell.signOutAll() }))]);
+    return [personal, pass, bankSection(m)].concat(docs(m));
+  }
+  // رقم الحساب البنكي (0072): the member types their own; it shows masked; «إظهار» = the full number from the server (mine, or an admin /
+  // sensitive.salaries on a member's file — every reveal logged on the server, never the number)
+  function bankOf(m) {
+    if (st.bankMe !== K.ME) { st.bank = {}; st.bankShown = {}; st.bankMe = K.ME; } // another sign-in on this tab never inherits a revealed number
+    const c = st.bank[m.id]; if (c) return c;
+    st.bank[m.id] = { status: 'loading', bank: null };
+    IH().bank(m.id).then((r) => { st.bank[m.id] = { status: r.ok ? 'ok' : 'error', bank: r.ok ? r.bank : null }; if (window.IBPages.current === 'profile' && !typing()) rerender(); });
+    return st.bank[m.id];
+  }
+  function bankSection(m) {
+    const own = !isAdminView() && m.id === K.ME; const reader = can().admin || can().salaries;
+    if (!IH() || (!own && !reader)) return null;
+    const C = bankOf(m); const b = C.bank; const shown = st.bankShown[m.id] || null;
+    const reveal = () => { if (shown) { delete st.bankShown[m.id]; rerender(); return; } IH().bankReveal(m.id).then((r) => { if (!r.ok) { K.toast(r.message || 'معرفناش نكشف الرقم — جرّب تاني', 'error'); return; } st.bankShown[m.id] = r.bank; rerender(); }); };
+    const body = C.status === 'loading' ? h('div', { class: 't-small help' }, 'بيحمّل…') : C.status === 'error' ? U.InlineNote({ kind: 'error', children: 'معرفناش نجيب الحساب البنكي — جرّب تاني كمان شوية.' })
+      : !b ? K.Empty(own ? 'لسه ماضفتش حسابك البنكي' : 'لسه ماضافش حسابه البنكي', own ? 'المرتب بيتحوّل عليه — ضيفه من «إضافة الحساب البنكي».' : 'العضو بيضيفه من «ملفي › بيانات الحساب».')
+      : h('div', { 'data-bank': '' }, K.Kv([['البنك', b.bankName], ['اسم صاحب الحساب', b.holder], ['رقم الحساب', h('span', { dir: 'ltr', 'data-bank-number': '' }, shown ? shown.number : b.account)], ['IBAN', b.iban ? h('span', { dir: 'ltr' }, shown ? shown.iban : b.iban) : '—']]),
+        h('div', { class: 't-small help' }, 'رقم الحساب مطموس — «إظهار» بيتسجل في سجل النشاط' + (b.at ? ' · آخر تعديل ' + K.dlabel(String(b.at).slice(0, 10)) : '')));
+    const acts = [b ? Button({ label: shown ? 'إخفاء' : 'إظهار', attrs: { 'aria-pressed': String(!!shown), 'data-bank-reveal': '' }, onClick: reveal }) : null,
+      own ? Button({ type: b ? 'secondary' : 'primary', label: b ? 'تعديل الحساب البنكي' : 'إضافة الحساب البنكي', attrs: { 'data-bank-edit': '' }, onClick: () => editBank(m, b) }) : null];
+    return K.Section('رقم الحساب البنكي', body, acts, { sub: own ? 'اللي المرتب بيتحوّل عليه' : 'للأدمن والمرتبات بس' });
+  }
+  function editBank(m, b) {
+    // the full number is never prefilled: editing means typing it again (the masked one is all the page holds)
+    K.form({ title: b ? 'تعديل الحساب البنكي' : 'إضافة الحساب البنكي', values: { bankName: b ? b.bankName : '', holder: b ? b.holder : m.name || '', number: '', iban: '' },
+      fields: (f, e, set) => [K.field.text('bankName', 'اسم البنك', f, e, set, { required: true }), K.field.text('holder', 'اسم صاحب الحساب', f, e, set, { required: true }),
+        K.field.text('number', 'رقم الحساب', f, e, set, { required: true, inputmode: 'numeric', help: b ? 'اكتب الرقم كامل تاني (الحالي ' + b.account + ')' : 'أرقام بس' }),
+        K.field.text('iban', 'IBAN (اختياري)', f, e, set, { help: 'زي EG38 0019 …' })],
+      validate: (f) => { const e = {}; if (!String(f.bankName || '').trim()) e.bankName = 'اكتب اسم البنك'; if (!String(f.holder || '').trim()) e.holder = 'اكتب اسم صاحب الحساب';
+        if (!/^[0-9]{6,30}$/.test(O.toLatin(String(f.number || '')).replace(/[\s-]/g, ''))) e.number = 'رقم الحساب أرقام بس (من 6 لـ 30 رقم)';
+        const ib = String(f.iban || '').replace(/[\s-]/g, '').toUpperCase(); if (ib && !/^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/.test(ib)) e.iban = 'الـ IBAN مش صحيح'; return e; },
+      submitLabel: 'حفظ', submit: (f, md) => {
+        if (md._busy) return false; md._busy = true;
+        IH().bankSet({ bankName: f.bankName, holder: f.holder, number: O.toLatin(String(f.number || '')), iban: f.iban }).then((r) => {
+          md._busy = false; if (!r.ok) { K.toast(r.message || 'معرفناش نحفظ — جرّب تاني', 'error'); return; }
+          st.bank[m.id] = { status: 'ok', bank: r.bank }; delete st.bankShown[m.id]; md.close(); K.toast('اتحفظ الحساب البنكي', 'success'); rerender();
+        });
+        return false;
+      } });
+  }
+
+  // ---------- popups ----------
+  // «تعديل بياناتي» (the owner 5 Nov: «دلوقتي»): the mobile on my profile (IBDirectory.updatePhone — taken = refused), the email
+  // through Supabase's confirmation link (IBAuth.changeEmail; the profile follows once it is confirmed — 0047). Neither is logged.
+  const INFO_MSG = { taken: 'الرقم ده مسجّل لعضو تاني', invalid: 'رقم موبايل مصري صحيح', forbidden: 'مش مسموح تغيّر الرقم ده', network: 'مشكلة في الاتصال — جرّب تاني', server: 'معرفناش نحفظ الموبايل — جرّب تاني' };
+  const MAIL_MSG = { taken: 'الإيميل ده مستخدم لحساب تاني', invalid: 'إيميل صحيح', same: 'ده نفس إيميلك', rate_limited: 'محاولات كتير — استنى شوية وجرّب تاني', network: 'مشكلة في الاتصال — جرّب تاني', server: 'معرفناش نبعت لينك التأكيد — جرّب تاني' };
+  // phase 13 decision 22 (owner 10 Nov — «البوب أب في تعديل البيانات محتاج يكون فيه كل بيانات المستخدم الأساسية … الدور والحالة قراءة
+  // فقط والتحكم فيهم من طرف الأدمن فقط»; «الاسم والموبايل والإيميل والباسورد، والمسمى الوظيفي قراءة والدور قراءة»): the name (IBDirectory.updateName
+  // — profiles_guard_update lets a member write name / phone on their own row), the mobile, the email (confirmation link), and an optional new
+  // password (IBAuth.changePassword checks the current one first); the job title, the department, the role and the status read-only.
+  const ST_AR = { active: 'نشط', suspended: 'موقوف', invited: 'مدعو' };
+  const NAME_MSG = { invalid: 'اكتب اسمك (من 2 لـ 80 حرف)', forbidden: 'مش مسموح تغيّر الاسم', network: 'مشكلة في الاتصال — جرّب تاني', server: 'معرفناش نحفظ الاسم — جرّب تاني' };
+  function editInfo(m) {
+    const ro = [['المسمى الوظيفي', m.title], ['الدور', m.role], ['الحالة', ST_AR[m.status] || 'نشط']].map(([k, v]) => [k, v || '—']);
+    K.form({ title: 'تعديل بياناتي', values: { name: m.name, phone: m.phone, email: m.email, cur: '', p1: '', p2: '' },
+      fields: (f, e, set) => [K.field.text('name', 'الاسم', f, e, set, { required: true }), K.field.text('phone', 'الموبايل', f, e, set, { required: true, inputmode: 'tel' }),
+        K.field.text('email', 'الإيميل', f, e, set, { required: true, help: 'تغيير الإيميل محتاج تأكيد من اللينك اللي هيوصلك' }),
+        h('div', { class: 't-label', style: 'margin-top:4px' }, 'تغيير كلمة المرور (اختياري)'),
+        K.field.text('cur', 'كلمة المرور الحالية', f, e, set, {}), K.two(K.field.text('p1', 'كلمة المرور الجديدة', f, e, set, { help: '8 حروف على الأقل فيها حرف ورقم' }), K.field.text('p2', 'أكّد كلمة المرور', f, e, set, {})),
+        h('div', { class: 't-label', style: 'margin-top:4px' }, 'بيانات الأدمن بيحددها'),
+        h('dl', { class: 'kv', 'data-info-readonly': '' }, ro.flatMap(([k, v]) => [h('dt', null, k), h('dd', null, String(v))])),
+        h('p', { class: 't-small help', style: 'margin:0' }, 'المسمى الوظيفي والدور والحالة بيتغيّروا من الأدمن بس (الموارد البشرية أو الإعدادات › الفريق).')],
+      validate: (f) => { const e = {}; const nm = String(f.name || '').trim().replace(/\s+/g, ' ');
+        if (nm.length < 2 || nm.length > 80) e.name = 'اكتب اسمك (من 2 لـ 80 حرف)';
+        if (O.identifierKind(f.phone) !== 'phone') e.phone = 'رقم موبايل مصري صحيح'; if (O.identifierKind(f.email) !== 'email') e.email = 'إيميل صحيح';
+        if (f.p1 || f.p2 || f.cur) { if (!f.cur) e.cur = 'اكتب كلمة المرور الحالية'; const p = O.validatePassword(f.p1 || '', f.p2 || ''); if (p) e[p.includes('مش زي') ? 'p2' : 'p1'] = p; }
+        return e; },
+      submitLabel: 'حفظ', submit: (f, md) => {
+        if (md._busy) return false; md._busy = true;
+        (async () => {
+          const out = { name: false, phone: false, email: '', pw: false }; const name = String(f.name || '').trim().replace(/\s+/g, ' ');
+          const phone = O.toLatin(String(f.phone || '')).trim(); const email = String(f.email || '').trim().toLowerCase();
+          if (name !== String(m.name || '')) { const r = await window.IBDirectory.updateName(name); if (!r.ok) return { ok: false, message: NAME_MSG[r.reason], out }; out.name = !r.same; }
+          if (phone !== String(m.phone || '')) { const r = await window.IBDirectory.updatePhone(phone); if (!r.ok) return { ok: false, message: INFO_MSG[r.reason], out }; out.phone = !r.same; }
+          if (email !== String(m.email || '').toLowerCase()) { const r = await window.IBAuth.changeEmail(email); if (!r.ok) return { ok: false, message: MAIL_MSG[r.reason], out }; out.email = email; }
+          if (f.p1) { const r = await window.IBAuth.changePassword(f.cur, f.p1); if (!r.ok) return { ok: false, message: PW_MSG[r.reason] || 'معرفناش نغيّر كلمة المرور — جرّب تاني', out }; out.pw = true; }
+          return { ok: true, out };
+        })().then((r) => {
+          md._busy = false; const o = r.out;
+          if (o.name || o.phone || o.email) K.logEvent('profile.edit', m.name);
+          if (o.pw) K.logEvent('profile.password', m.name);
+          const done = [o.name ? 'الاسم' : '', o.phone ? 'الموبايل' : '', o.pw ? 'كلمة المرور' : ''].filter(Boolean);
+          if (!r.ok) { K.toast((done.length ? 'اتحفظ ' + done.join(' و') + ' · ' : '') + (r.message || 'حصلت مشكلة — جرّب تاني'), 'error'); if (done.length) rerender(); return; }
+          md.close(); if (done.length) rerender();
+          K.toast(o.email ? 'اتبعت لينك تأكيد على ' + o.email + ' — الإيميل بيتغيّر بعد ما تضغطه' + (done.length ? ' · واتحفظ ' + done.join(' و') : '') : done.length ? 'اتحفظ ' + done.join(' و') + (o.pw ? ' — الأجهزة التانية هتخرج' : '') : 'مفيش حاجة اتغيّرت', o.name || o.phone || o.email || o.pw ? 'success' : undefined);
+        });
+        return false;
+      } });
+    setTimeout(() => document.querySelectorAll('.modal-b input#cur, .modal-b input#p1, .modal-b input#p2').forEach((i) => { i.type = 'password'; i.autocomplete = i.id === 'cur' ? 'current-password' : 'new-password'; }));
+  }
+  // the job and the pay (phase 10 T7): the shift, the hire date and the leave days through IBHR.memberUpdate (hr.edit F), the pay through
+  // IBHR.payUpdate (sensitive.salaries F) — each part only for who may write it; the title and the role stay the settings page's
+  function editJob(m) {
+    const c0 = can(); const c = Object.assign({}, c0, { job: c0.edit || canEdit(m) }); const time = /^\d{1,2}:\d{2}$/;
+    // owner batch 14 Nov decision 16 (0092): «المدير المباشر» — his role's manager (automatic) or one set by hand (the admin / hr.edit F)
+    const HRm = IH(); const auto = HRm && HRm.roleManager ? HRm.roleManager(m.roleId) : null; const autoName = auto ? ((K.store.members.find((x) => x.uid === auto) || {}).name || '') : '';
+    const mgrOpts = [{ value: '', label: 'مدير الدور (تلقائي)' + (autoName ? ' — ' + autoName : ' — مفيش') }].concat(K.store.members.filter((x) => (!x.status || x.status === 'active') && x.id !== m.id).map((x) => ({ value: x.id, label: x.name })));
+    const curMgr = m.managerFixed && m.manager ? m.manager : '';
+    K.form({ title: 'تعديل الوظيفة والمرتب — ' + m.name, values: { mgr: curMgr, salary: String(m.salary || 0), holdback: String(m.holdback || 0), allow: String(m.allow || 0), s0: m.shift[0], s1: m.shift[1], hire: m.hire || '', leave: String(m.leave == null ? 21 : m.leave) },
+      fields: (f, e, set) => [c.salaries ? K.two(K.field.text('salary', 'المرتب', f, e, set, { required: true, inputmode: 'decimal', suffix: 'ج.م' }), K.field.text('holdback', 'الحجز للبونص', f, e, set, { inputmode: 'decimal', suffix: 'ج.م' })) : null,
+        c.salaries ? K.field.text('allow', 'البدلات الثابتة', f, e, set, { inputmode: 'decimal', suffix: 'ج.م' }) : null,
+        c.job ? K.two(K.field.text('s0', 'بداية الشيفت', f, e, set, { required: true, placeholder: '09:00' }), K.field.text('s1', 'نهاية الشيفت', f, e, set, { required: true, placeholder: '17:00' })) : null,
+        c.job ? K.two(K.field.date('hire', 'تاريخ التعيين', f, e, set), K.field.text('leave', 'أيام الإجازة السنوية', f, e, set, { inputmode: 'numeric' })) : null,
+        c.edit ? K.field.select('mgr', 'المدير المباشر', mgrOpts, f, e, set, { help: 'مدير الدور بيتحدد من «الإعدادات › الموارد البشرية › مديري الأدوار»' }) : null,
+        U.InlineNote({ children: (c.salaries ? 'المرتب الجديد بيدخل كشف الشهر المفتوح. ' : '') + 'المسمى والدور بيتغيروا من صفحة الإعدادات.' })],
+      validate: (f) => { const e = {};
+        if (c.salaries) { if (f.salary === '' || !(Number(f.salary) >= 0)) e.salary = 'اكتب المرتب'; if (f.holdback !== '' && !(Number(f.holdback) >= 0)) e.holdback = 'رقم صحيح'; else if (Number(f.holdback) > Number(f.salary)) e.holdback = 'الحجز لازم أقل من المرتب'; if (f.allow !== '' && !(Number(f.allow) >= 0)) e.allow = 'رقم صحيح'; }
+        if (c.job) { if (!time.test(f.s0 || '')) e.s0 = 'اكتب الوقت كده 09:00'; if (!time.test(f.s1 || '')) e.s1 = 'اكتب الوقت كده 17:00'; if (f.leave !== '' && !(Number.isInteger(Number(f.leave)) && Number(f.leave) >= 0 && Number(f.leave) <= 60)) e.leave = 'من 0 لـ 60 يوم'; }
+        return e; },
+      submitLabel: 'حفظ', submit: (f, md) => {
+        if (md._busy) return false; md._busy = true;
+        (async () => {
+          if (c.job) { const r = await IH().memberUpdate(m.id, { shift: [f.s0.padStart(5, '0'), f.s1.padStart(5, '0')], hire: f.hire || null, leave: f.leave === '' ? undefined : Number(f.leave) }); if (!r.ok) return r; }
+          if (c.edit && (f.mgr || '') !== curMgr) { const r = await IH().memberManagerSet(m.id, f.mgr || null); if (!r.ok) return r; }
+          if (c.salaries) { const r = await IH().payUpdate(m.id, { salary: Number(f.salary), holdback: Number(f.holdback) || 0, allow: Number(f.allow) || 0 }); if (!r.ok) return r; }
+          return { ok: true };
+        })().then((r) => { md._busy = false; if (r.ok) { md.close(); K.toast('اتحفظ', 'success'); } else K.toast(r.message || 'حصلت مشكلة — جرّب تاني', 'error'); });
+        return false;
+      } });
+  }
+  // «تغيير كلمة المرور» (decision 6: the member replaces the temporary password): IBAuth.changePassword checks the current one first
+  const PW_MSG = { current: 'كلمة المرور الحالية غلط', same: 'كلمة المرور الجديدة لازم تختلف عن الحالية', weak: 'كلمة المرور دي ضعيفة — خليها أطول وفيها حروف وأرقام', rate_limited: 'محاولات كتير — استنى شوية وجرّب تاني', network: 'مشكلة في الاتصال — جرّب تاني' };
+  function changePassword() {
+    K.form({ title: 'تغيير كلمة المرور', values: {}, fields: (f, e, set) => [K.field.text('cur', 'كلمة المرور الحالية', f, e, set, { required: true }), K.field.text('p1', 'كلمة المرور الجديدة', f, e, set, { required: true, help: '8 حروف على الأقل فيها حرف ورقم' }), K.field.text('p2', 'أكّد كلمة المرور', f, e, set, { required: true })],
+      validate: (f) => { const e = K.req(f, ['cur']); const p = O.validatePassword(f.p1 || '', f.p2 || ''); if (p) e[p.includes('مش زي') ? 'p2' : 'p1'] = p; return e; },
+      submitLabel: 'تغيير', submit: (f, md) => {
+        if (md._busy) return false; md._busy = true;
+        window.IBAuth.changePassword(f.cur, f.p1).then((r) => { md._busy = false;
+          if (r.ok) { md.close(); K.logEvent('profile.password', K.member(K.ME).name); K.toast('اتغيرت كلمة المرور — الأجهزة التانية هتخرج', 'success'); } else K.toast(PW_MSG[r.reason] || 'معرفناش نغيّرها — جرّب تاني', 'error'); });
+        return false;
+      } });
+    setTimeout(() => document.querySelectorAll('.modal-b input').forEach((i) => { i.type = 'password'; i.autocomplete = i.id === 'cur' ? 'current-password' : 'new-password'; }));
+  }
+  // التحقق بخطوتين (phase 2 Task 7, decision): the Authenticator app is the only live channel (واتساب / إيميل wait for the WhatsApp
+  // bridge). 1 channel → 2 QR + key (IBAuth.enrollTotp) → 3 the first 6-digit code (IBAuth.verifyEnroll) → done. m.twofa is the
+  // directory's copy of the server's profiles.twofa (IBAuth updates it); this dialog never sets it.
+  const SOON_2FA = 'بعد تشغيل جسر واتساب';
+  const RECOVERY_2FA = 'لو ضيّعت التطبيق، الأدمن يقدر يشيل التحقق من لوحة Supabase لحد ما نضيف أكواد احتياطية';
+  const netMsg = (r) => (r.reason === 'network' ? 'مشكلة في الاتصال — جرّب تاني' : 'معرفناش نكمّل من السيرفر — جرّب تاني');
+  function enable2fa(m) {
+    let step = 1; let code = ''; let err = ''; let busy = false; let f = null;
+    const md = U.Modal({ title: 'تفعيل التحقق بخطوتين', body: [], onClose: () => { if (step === 4) rerender(); } });
+    const opt = (label, hint, on) => h('button', { type: 'button', role: 'radio', class: 'radio', 'aria-checked': String(on), disabled: !on }, h('i'), h('span', null, label), h('small', { class: 't-small help' }, hint));
+    const channels = () => h('div', { class: 'field' }, h('span', { class: 'flabel' }, 'هيوصلك الكود فين'), h('div', { class: 'radios', role: 'radiogroup', 'aria-label': 'هيوصلك الكود فين' },
+      opt('واتساب على ' + m.phone, SOON_2FA, false), opt('إيميل على ' + m.email, SOON_2FA, false), opt('تطبيق Authenticator', 'Google Authenticator أو Microsoft Authenticator أو أي تطبيق زيهم', true)));
+    // the QR only as a data:image URI from Supabase; the key as plain text (both are set through the DOM, never as markup)
+    const qr = () => (f && /^data:image\//.test(f.qr) ? h('img', { src: f.qr, alt: 'كود QR لتطبيق Authenticator', width: 180, height: 180, style: 'display:block;margin:8px auto;background:#fff;padding:8px;border-radius:8px' }) : null);
+    const copyKey = () => { try { navigator.clipboard.writeText(f.secret).then(() => K.toast('اتنسخ المفتاح'), () => K.toast('حدد المفتاح وانسخه')); } catch (e) { K.toast('حدد المفتاح وانسخه'); } };
+    const note = () => (err ? U.InlineNote({ kind: 'error', children: err }) : null);
+    async function start() {
+      if (busy) return; busy = true; err = ''; draw();
+      const r = await window.IBAuth.enrollTotp(); busy = false;
+      if (!r.ok) { err = netMsg(r); return draw(); }
+      f = r; step = 2; draw();
+    }
+    async function confirmCode() {
+      if (busy) return; busy = true; err = ''; draw();
+      const r = await window.IBAuth.verifyEnroll(f.factorId, code); busy = false;
+      if (r.ok) { step = 4; return draw(); }
+      code = '';
+      if (r.reason === 'code') err = 'الكود غلط — جرّب تاني';
+      else if (r.reason === 'server') { err = 'السيرفر ماأكدش التفعيل — ابدأ من الأول'; step = 1; f = null; } // the factor was removed again
+      else err = netMsg(r);
+      draw();
+    }
+    const draw = () => {
+      md.setBody(...[note()].concat(step === 1 ? [channels()]
+        : step === 2 ? [h('p', { style: 'margin:0' }, 'افتح التطبيق وامسح الكود ده. لو مش عارف تمسحه، اكتب المفتاح بإيدك:'), qr(), h('div', { class: 'codes', dir: 'ltr' }, h('code', { style: 'user-select:all;word-break:break-all' }, f.secret))]
+          : step === 3 ? [h('p', { style: 'margin:0' }, 'اكتب الـ 6 أرقام اللي ظاهرة في التطبيق دلوقتي.'), U.TextInput({ id: 'tfa-code', label: 'الكود', value: code, inputmode: 'numeric', maxlength: 6, onInput: (v) => { code = v; } })]
+            : [U.InlineNote({ kind: 'success', children: 'اتفعّل التحقق بخطوتين. من المرة الجاية هنطلب الكود بعد كلمة المرور.' }), h('p', { class: 't-small', style: 'margin:0' }, RECOVERY_2FA)]).filter(Boolean));
+      const cancel = Button({ label: 'إلغاء', onClick: () => md.close() });
+      md.setFooter(...(step === 1 ? [cancel, Button({ type: 'primary', label: 'كمّل', disabled: busy, onClick: start })]
+        : step === 2 ? [Button({ label: 'نسخ المفتاح', icon: 'copy', onClick: copyKey }), cancel, Button({ type: 'primary', label: 'كمّل', onClick: () => { step = 3; err = ''; draw(); } })]
+          : step === 3 ? [Button({ label: 'رجوع', onClick: () => { step = 2; err = ''; draw(); } }), cancel, Button({ type: 'primary', label: 'تأكيد', disabled: busy, onClick: confirmCode })]
+            : [Button({ type: 'primary', label: 'خلصت', onClick: () => md.close() })]));
+      if (step === 3) setTimeout(() => { const i = md.el.querySelector('#tfa-code'); if (i) i.focus(); });
+    };
+    draw();
+  }
+  // «إيقاف»: only on a session signed in with the code (aal2); IBAuth clears the server flag, then the factor
+  async function disable2fa() {
+    const r = await window.IBAuth.unenrollTotp();
+    if (!r.ok) return K.toast(r.reason === 'aal1' ? 'سجّل دخول بالكود الأول' : netMsg(r), 'error');
+    K.toast('اتوقف التحقق بخطوتين', 'success'); rerender();
+  }
+
+  window.IBPages.register('profile', { title: 'ملفي', hash: (hs) => { let m = /^profile(?:-([a-z]+))?(?:-(forme|mine|all))?$/.exec(hs); if (m) { st.who = null; st.tab = m[1] && TABS.some((t) => t[0] === m[1]) ? m[1] : 'overview'; if (m[2]) st.reqTab = m[2]; return true; } m = /^member-(M\d{2,4})$/.exec(hs); if (m && (S.members.some((x) => x.id === m[1]) || (window.IBHR && window.IBHR.member(m[1])))) { if (whoId() !== m[1]) st.tab = 'overview'; st.who = m[1] === K.ME ? null : m[1]; return true; } return false; },
+    defaultHash: () => (isAdminView() ? 'member-' + st.who : 'profile' + (st.tab === 'overview' ? '' : '-' + st.tab)), view, navPage: () => (isAdminView() ? 'hr' : null),
+    api: { autoTasks: () => { const m = HM(K.ME); return m && m.id ? autoOf(m) : []; } } });
+})();
+

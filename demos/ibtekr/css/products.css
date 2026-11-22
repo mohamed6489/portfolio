@@ -1,0 +1,355 @@
+/* «المنتجات» (phase 5) — from the prototype's style.css (artifact 1793131460, lines 1347–1505 / 1555–1741), the parts the records,
+   the trash and the edit page use. Rules that also name a class other pages have (.prod, .stk, .pager, .meta) are scoped to #pg-products. */
+:is(#pg-products,#pg-marketing) .crumb{margin:0 0 2px;color:var(--color-text-secondary)}
+:is(#pg-products,#pg-marketing) .page-head .fresh{margin-top:4px}
+:is(#pg-products,#pg-marketing) .panel{display:flex;flex-direction:column;gap:16px}
+:is(#pg-products,#pg-marketing) .help{color:var(--color-text-secondary)}
+:is(#pg-products,#pg-marketing) .brand-t{color:var(--color-brand-default)}
+:is(#pg-products,#pg-marketing) .err-t{color:var(--color-error-text);font-size:12px}
+:is(#pg-products,#pg-marketing) .stack{display:flex;flex-direction:column;gap:12px;min-width:0}
+:is(#pg-products,#pg-marketing) .row-flex{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0}
+:is(#pg-products,#pg-marketing) .sub-h{margin:4px 0 0}
+:is(#pg-products,#pg-marketing) .sec-b{display:flex;flex-direction:column;gap:12px}
+/* tool cards (Figma Add hub) */
+.tools-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+.tools-grid.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.tool-card{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:16px;text-align:start;cursor:pointer;font:inherit;color:inherit;border:1px solid var(--color-border-subtle)}
+.tool-card:hover{border-color:var(--color-action-default)}
+.tool-card:focus-visible{outline:2px solid var(--color-border-focus);outline-offset:2px}
+.tool-ic{width:40px;height:40px;border-radius:var(--radius-md);background:var(--color-brand-subtle-bg);color:var(--color-brand-default);display:grid;place-items:center}
+.tool-card .tc-b{color:var(--color-text-secondary);flex:1}
+.tool-card .tc-cta{display:inline-flex;align-items:center;gap:4px;color:var(--color-brand-default);font-weight:600;margin-top:4px}
+/* layouts */
+.side-layout{display:flex;gap:16px;align-items:flex-start}
+.side-layout>.grow{flex:1;min-width:0}
+.side-layout>.side-card{flex:0 0 340px;min-width:0}
+/* records */
+.pr-filters .field{min-width:150px}
+.bulk-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-radius:var(--radius-md);background:var(--color-brand-subtle-bg);border:1px solid var(--color-border-subtle)}
+#pg-products .prod.link{background:transparent;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:start}
+#pg-products .prod.link:hover b{color:var(--color-brand-default);text-decoration:underline}
+#pg-products .prod{display:inline-flex;align-items:center;gap:8px;min-width:0}#pg-products .prod>span:last-child{display:flex;flex-direction:column;gap:2px;min-width:0}
+#pg-products .prod small{color:var(--color-text-secondary);font-size:12px}
+#pg-products .stk{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+#pg-products .pct{display:inline-flex;align-items:center;gap:6px;min-width:96px}#pg-products .pct .bar{flex:1;min-width:48px}
+#pg-products .pager{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;color:var(--color-text-secondary)}
+.thumb.lg2{width:56px;height:56px}
+.thumb.md{width:72px;height:80px}
+.thumb.xl{width:96px;height:110px}
+.thumb.big{width:100%;height:auto;aspect-ratio:7/8}
+.thumb.fill{width:100%;height:100%;border-radius:0}
+.img-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:16px}
+.img-it{position:relative;display:flex;flex-direction:column;gap:4px;margin:0;padding:0;border:0;background:transparent;font:inherit;cursor:pointer;text-align:start}
+.img-it .thumb.xl{width:100%}
+.img-it .tg{position:absolute;top:6px;inset-inline-start:6px}
+.img-it .img-n{position:absolute;top:6px;inset-inline-end:6px;min-width:22px;height:22px;padding:0 6px;border-radius:11px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;background:var(--color-bg-base);color:var(--color-text-primary);border:1px solid var(--color-border-subtle)}
+.img-it .thumb.xl{aspect-ratio:7/8;height:auto;border-radius:var(--radius-md)}
+.img-it figcaption{font-size:11px;color:var(--color-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.img-it.on .thumb{outline:2px solid var(--color-action-default);outline-offset:2px}
+.sel-acts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-radius:var(--radius-md);background:var(--color-bg-tint)}
+/* edit product */
+.edit-head{align-items:center}.eh-l{display:flex;gap:12px;align-items:center;min-width:0}.eh-l h1{margin:0}
+#pg-products .meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px}
+.unsaved{position:sticky;bottom:0;z-index:3;display:flex;align-items:center;gap:8px;padding:12px 16px;border-radius:var(--radius-md);background:var(--color-bg-elevated);border:1px solid var(--color-border-subtle);box-shadow:var(--shadow-popover)}
+.unsaved b{flex:1}
+#pg-products .thumb.st-big{width:88px;height:100px}
+:is(#pg-products,.st-drawer) .thumb.mini{width:44px;height:52px}
+:is(#pg-products,.st-drawer) .thumb.empty-img{background:var(--color-bg-base);border:1px dashed var(--color-border-default);color:var(--color-text-secondary)}
+#pg-products .cat-list{display:flex;flex-direction:column;gap:2px}#pg-products .cat-hit{color:var(--color-brand-default);font-weight:700}
+:is(#pg-products,#pg-marketing,.modal) td:has(> .prod), :is(#pg-products,#pg-marketing,.modal) td:has(> .st-prod){text-align:start}
+:is(#pg-products,#pg-marketing,.modal) td > .prod{display:flex;justify-content:flex-start;text-align:start}
+:is(#pg-products,#pg-marketing) .pr-table th:nth-child(2){text-align:start}
+.th-sort{all:unset;cursor:pointer;font:inherit;color:inherit;display:inline-flex;align-items:center;gap:2px;border-radius:4px;padding:2px 4px}
+.th-sort:hover{background:var(--color-bg-hover)}
+.th-sort:focus-visible{outline:2px solid var(--color-border-focus,var(--color-action-primary));outline-offset:2px}
+.sort-ic{color:var(--color-text-secondary);font-size:12px}
+.sales-cell{font-variant-numeric:tabular-nums}
+@media (max-width:1279px){.tools-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.side-layout{flex-direction:column}.side-layout>.side-card{flex:1 1 auto;width:100%}}
+@media (max-width:599px){.tools-grid,.tools-grid.c3{grid-template-columns:1fr}}
+/* phase 5.1: the SEO tab's search-result preview */
+.seo-prev{display:flex;flex-direction:column;gap:2px;padding:12px 16px;border:1px solid var(--color-border-subtle);border-radius:var(--radius-md);background:var(--color-bg-container);min-width:0}
+.seo-prev b{color:var(--color-brand-default);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.seo-prev small,.seo-prev span{overflow-wrap:anywhere}
+/* phase 5.1 (decision 20): the reports tab */
+#pg-products .pr-rep-bar{align-items:center}
+#pg-products .bars{display:flex;flex-direction:column;gap:12px;min-width:0}
+#pg-products .link-btn{border:0;background:none;padding:0;font:inherit;font-weight:600;color:var(--color-brand-default);cursor:pointer;text-align:start;text-decoration:underline;text-underline-offset:3px}
+#pg-products .link-btn:hover{color:var(--color-brand-hover)}
+#pg-products .pr-rep-bar .grow{flex:1 1 280px}
+@media (max-width:767px){#pg-products .charts{grid-template-columns:1fr}}
+/* phase 5.3: the content tool (prototype 1793230184, contentTool) */
+.out-b{display:flex;flex-direction:column;gap:4px}
+.out-b small{color:var(--color-text-secondary)}
+.out-b [contenteditable]{padding:8px 12px;border:1px solid var(--color-border-subtle);border-radius:var(--radius-md);background:var(--color-bg-base);line-height:22px;white-space:pre-wrap;overflow-wrap:anywhere}
+.out-b [contenteditable]:focus{outline:2px solid var(--color-border-focus)}
+.out-miss{padding:8px 12px;border:1px dashed var(--color-border-subtle);border-radius:var(--radius-md)}
+.ct-photo{display:flex;gap:12px;align-items:center}
+.ct-photo img{width:96px;height:96px;object-fit:cover;border-radius:var(--radius-md);border:1px solid var(--color-border-subtle)}
+.ct-photo>div{display:flex;flex-direction:column;gap:2px;align-items:flex-start}
+/* phase 5.4: the images tool */
+.ig-fields{display:flex;flex-direction:column;gap:12px}
+.ig-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start}
+.ig-custom{display:flex;gap:8px;align-items:flex-end}.ig-custom .field{flex:1;min-width:0}
+.ig-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
+.ig-it{position:relative;display:flex;flex-direction:column;gap:6px;margin:0;padding:0;border:0;background:transparent;font:inherit;text-align:start}
+.ig-it .thumb{width:100%;aspect-ratio:7/8;height:auto;border-radius:var(--radius-md);overflow:hidden;background:var(--color-bg-tint);display:flex;align-items:center;justify-content:center;color:var(--color-text-secondary)}
+.ig-it .thumb img{width:100%;height:100%;object-fit:cover}
+.ig-it .ig-acts{display:flex;gap:4px;flex-wrap:wrap}
+.ig-it .ig-chk{position:absolute;top:6px;inset-inline-start:6px;background:var(--color-bg-base);border-radius:var(--radius-sm);padding:2px 4px}
+.ig-src{display:flex;gap:12px;align-items:center}
+.ig-src img{width:120px;height:120px;object-fit:cover;border-radius:var(--radius-md);border:1px solid var(--color-border-subtle)}
+.ig-src>div{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.ig-cost{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-radius:var(--radius-md);background:var(--color-brand-subtle-bg);font-size:13px}
+@media (max-width:767px){.ig-row{grid-template-columns:1fr}}
+/* phase 13 decision 56: «الأقسام» — the site's category tree */
+.cat-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.cat-bar .input{min-width:220px;max-width:360px;flex:1}
+.cat-tree .sec-b{display:flex;flex-direction:column;gap:0;padding:0}
+/* (16 Nov) the old .cat-row rules of the tab before B4 are gone — they took over the commission tree's grid in app.css */
+.cat-tog{width:28px;height:28px;flex:none;display:grid;place-items:center;border:1px solid var(--color-border-subtle);border-radius:var(--radius-sm,6px);background:var(--color-bg-container);color:var(--color-brand-default);font-weight:700;cursor:pointer}
+.cat-tog.sp{border:0;background:transparent;cursor:default}
+.cat-tog:focus-visible{outline:2px solid var(--color-action-default);outline-offset:1px}
+/* B3 (the owner, 11 Nov — «صغر ال width … جدولين جمب بعض»): the overview's two tables side by side on a wide screen */
+#pg-products .pr-ov-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+#pg-products .pr-ov-two>.sec{margin:0;min-width:0}
+@media (max-width:1100px){#pg-products .pr-ov-two{grid-template-columns:1fr}}
+/* the records' filters: a multi-select per filter (no «البراند:» before the values) */
+#pg-products .pr-filters .mp .select{min-width:120px}
+#pg-products .pr-ov-two table{min-width:0}
+/* B4 (the owner, 11 Nov): the categories tab — a main category is a green card (beige text), its sub-categories beige rows under it
+   with «-» / «--» / «---» by depth; the products' count is a button; the arrow turns toward the reading side when closed */
+#pg-products .cat-sum{margin:0 0 8px}
+#pg-products .cat-mains{display:flex;flex-direction:column;gap:10px}
+.cat-main{border:1px solid var(--color-brand-default);border-radius:var(--radius-md,10px);overflow:hidden;background:var(--color-bg-container)}
+.cat-main-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:48px;padding:6px 12px;background:var(--color-brand-default);color:var(--color-text-on-brand)}
+.cat-main-h .cat-name{font-size:15px}
+.cat-main-h .cat-n{font-size:12px;opacity:.85}
+.cat-main-h .grow,.cat-sub .grow{flex:1}
+.cat-main-h .cat-tog{border-color:rgba(255,247,239,.45);background:transparent;color:var(--color-text-on-brand)}
+.cat-main-h .icon-btn{color:var(--color-text-on-brand)}
+.cat-main-h .cat-hit{background:rgba(255,247,239,.18);border-radius:4px;padding:0 4px}
+.cat-subs{display:flex;flex-direction:column}
+/* comments decision 56: a category's six-dot grip (its place among its siblings, written to the site) — an item = its row and its own children */
+.cat-kids,.cat-item{display:flex;flex-direction:column}
+.cat-grip{flex:none;width:28px;height:28px;display:grid;place-items:center;border:0;background:transparent;border-radius:var(--radius-xs,4px);color:var(--color-text-secondary);cursor:grab;touch-action:none}
+.cat-grip:hover{background:var(--color-bg-hover);color:var(--color-text-primary)}
+.cat-grip:active{cursor:grabbing}
+.cat-grip:focus-visible{outline:2px solid var(--color-action-default);outline-offset:1px}
+.cat-grip[disabled]{opacity:.45;cursor:progress}
+.cat-main-h .cat-grip{color:var(--color-text-on-brand)}
+.cat-main-h .cat-grip:hover{background:rgba(255,247,239,.16);color:var(--color-text-on-brand)}
+.cat-main-h .cat-grip .ic{color:var(--color-text-on-brand);stroke:var(--color-text-on-brand)}
+.cat-item.dragging,.cat-main.dragging{position:relative;z-index:2;box-shadow:var(--shadow-popover);opacity:.96}
+.cat-mains.sorting,.cat-subs.sorting,.cat-kids.sorting{cursor:grabbing;user-select:none}
+.cat-sub{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:44px;padding:6px 12px;padding-inline-start:calc(12px + (var(--d, 1) - 1) * 20px);background:var(--color-bg-container);border-top:1px solid var(--color-bg-tint)}
+.cat-sub .cat-hit{background:var(--color-brand-subtle-bg);border-radius:4px;padding:0 4px}
+.cat-dash{min-width:14px;color:var(--color-text-secondary);font-weight:700;letter-spacing:1px}
+.cat-count{min-height:32px;padding:0 12px;border:1px solid var(--color-bg-tint);border-radius:999px;background:var(--color-bg-base);color:var(--color-brand-default);font:inherit;font-weight:700;white-space:nowrap;cursor:pointer}
+.cat-count:hover:not(:disabled){border-color:var(--color-action-default)}
+.cat-count:disabled{cursor:default;opacity:.7}
+.cat-count:focus-visible{outline:2px solid var(--color-action-default);outline-offset:1px}
+.cat-tog .chev{display:inline-block;transition:transform .15s}
+.cat-tog[aria-expanded=false] .chev{transform:rotate(90deg)}
+.cat-img{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.cat-img-prev,.cat-img-none{width:96px;height:96px;border-radius:8px;flex:none}
+.cat-img-prev{object-fit:cover;border:1px solid var(--color-border-subtle)}
+.cat-img-none{display:grid;place-items:center;border:1px dashed var(--color-border-default);font-size:12px;color:var(--color-text-secondary);text-align:center}
+.cat-parent{margin:0 0 8px}
+.modal .cat-prods{min-width:0}
+/* the ⋮ is brand green everywhere (app.css .ic-more): beige on the green header, and a light hover there */
+.cat-main-h .ic.ic-more,.cat-main-h button .ic.ic-more,.cat-main-h button:hover .ic.ic-more{color:var(--color-text-on-brand);stroke:var(--color-text-on-brand)}
+.cat-main-h .icon-btn:hover{background:rgba(255,247,239,.16)}
+
+/* the owner 12 Nov — the records card (a try on the products before the other tables): the search in the header next to «فلتر»,
+   the header's buttons centred on the title block */
+#pg-products .pr-rec.tbl-v2>.sec-h,#pg-products .pr-rec>.sec-h{align-items:center}
+#pg-products .pr-rec>.sec-h .acts .search-field{height:32px;min-width:220px;flex:0 1 260px;background:var(--color-bg-base)}
+@media (max-width:767px){#pg-products .pr-rec>.sec-h .acts .search-field{min-width:0;flex:1 1 100%}}
+@media (min-width:768px){#pg-products .pr-rec>.sec-h .acts{flex-wrap:nowrap}}
+@media (max-width:767px){#pg-products .pr-rec>.sec-h .acts{flex-wrap:wrap}#pg-products .pr-rec>.sec-h .acts>*{flex:0 0 auto}#pg-products .pr-rec>.sec-h .acts>.search-field{flex:1 1 100%}}
+/* owner batch 14 Nov decision 9: the levels of a branch get lighter (- / -- / ---), each row with a checkbox, a small image and its slug;
+   the ⋮ menu that opens on the green header keeps the kit's colours (it inherited the header's beige text) */
+.cat-sub.lvl-1{background:var(--lvl-1)}
+.cat-sub.lvl-2{background:var(--lvl-2)}
+.cat-sub.lvl-3{background:var(--lvl-3)}
+.cat-sub{border-top-color:rgba(46,42,27,.06)}
+.cat-thumb{width:28px;height:28px;border-radius:6px;object-fit:cover;flex:none;border:1px solid var(--color-border-subtle);background:var(--color-bg-base)}
+.cat-thumb.none{display:inline-grid;place-items:center;color:var(--color-text-secondary)}
+.cat-main-h .cat-thumb{border-color:rgba(255,247,239,.45)}
+.cat-main-h .cat-thumb.none{background:rgba(255,247,239,.12);color:var(--color-text-on-brand)}
+.cat-slug{font-size:11px;padding:1px 6px;border-radius:4px;background:var(--color-bg-base);color:var(--color-text-secondary);border:1px solid var(--color-border-subtle)}
+.cat-main-h .cat-slug{background:rgba(255,247,239,.14);color:var(--color-text-on-brand);border-color:rgba(255,247,239,.3)}
+.cat-cb{display:inline-flex;align-items:center}
+.cat-main-h .cat-cb .cb{border-color:rgba(255,247,239,.7)}
+.cat-main-h .menu,.cat-main-h [role=menu]{color:var(--color-text-primary)}
+.cat-main-h .menu .opt{color:var(--color-text-primary)}
+.cat-main-h .menu .opt.danger{color:var(--color-error-text)}
+.cat-main-h .menu .opt .ic{color:inherit;stroke:currentColor}
+.cat-bulk{margin-bottom:10px}
+.modal .cat-prods-q{width:100%;margin-bottom:8px}
+/* the assistant's category plan — «مراجعة الأقسام» (2026-11-15-assistant-categories.md): a row per category, indented by its level in the
+   categories tab's own beiges, the two names side by side, «+» a sub-category and the bin, its state on a line under them */
+.cp-head,.cp-row{display:flex;align-items:center;gap:8px}
+.cp-head{padding:0 10px;color:var(--color-text-secondary);font-size:12px;font-weight:600}
+.cp-list{flex:none;border:1px solid var(--color-border-subtle);border-radius:var(--radius-md);overflow:hidden}
+.cp-row{flex-wrap:wrap;padding:8px 10px;padding-inline-start:calc(10px + var(--d, 0) * 22px);background:var(--color-bg-base);border-top:1px solid rgba(46,42,27,.06)}
+.cp-row:first-child{border-top:0}
+.cp-row.lvl-0{background:var(--color-brand-subtle-bg)}
+.cp-row.lvl-1{background:var(--lvl-1, var(--color-bg-container))}
+.cp-row.lvl-2{background:var(--lvl-2, var(--color-bg-container))}
+.cp-row.lvl-3{background:var(--lvl-3, var(--color-bg-container))}
+.cp-row.lvl-0 .cp-cell .input{font-weight:600}
+.cp-dash{flex:none;width:22px;color:var(--color-text-secondary);font-weight:700;letter-spacing:1px}
+.cp-cell{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:2px}
+.cp-cell .input{width:100%;min-width:0}
+.cp-cell .input.err{border-color:var(--color-error-border)}
+.cp-acts{flex:none;width:80px;display:flex;justify-content:flex-end;gap:4px}
+.cp-tag{flex:0 0 100%;padding-inline-start:30px}
+.cp-tag:empty{display:none}
+[data-cp-err]{color:var(--color-error-text);margin:0}
+.cp-foot{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:4px}
+.cp-foot .cp-sum{margin:0;flex:1;min-width:200px}
+@media (max-width:767px){
+  .cp-head{display:none}
+  .cp-row{padding-inline-start:calc(8px + var(--d, 0) * 10px)}
+  .cp-dash{width:16px}
+  .cp-cell{flex:1 1 calc(100% - 24px)}
+  .cp-cell + .cp-cell{margin-inline-start:24px}
+  .cp-acts{width:auto;margin-inline-start:auto}
+  .cp-tag{flex:1 1 0;order:1;padding-inline-start:24px}
+  .cp-acts{order:2}
+}
+
+/* «الخصم الوهمي» بالشرايح (the owner 15 Nov — fake-discount.js): the tiers popup — one table: # · من · لحد · نزوّد · النوع · مسح
+   (16 Nov: «ظبط ال ui بشكل احترافي و منظم» — a header once, the rows under it, «لحد» says its error under the field while typed) */
+.fk-table{border:1px solid var(--color-border-subtle);border-radius:var(--radius-md);overflow:hidden;background:var(--color-bg-base)}
+.fk-head,.fk-row{display:grid;grid-template-columns:28px 84px minmax(0,1fr) minmax(0,1fr) 108px 36px;column-gap:12px;padding:8px 12px}
+.fk-head{background:var(--color-brand-default);color:var(--color-text-on-brand);font-size:13px;font-weight:700;align-items:center;min-height:40px}
+.fk-list{display:flex;flex-direction:column}
+.fk-row{align-items:start;border-top:1px solid var(--color-border-subtle)}
+.fk-list .fk-row:first-child{border-top:0}
+.fk-list .fk-row:nth-child(even){background:var(--color-bg-subtle, #f6f1e7)}
+.fk-idx{line-height:36px;color:var(--color-text-secondary);font-weight:700}
+.fk-from,.fk-to,.fk-add{display:flex;flex-direction:column;gap:4px;min-width:0}
+.fk-from b{line-height:36px}
+.fk-lab{display:none;color:var(--color-text-secondary)}
+.fk-cell{display:flex;flex-direction:column;gap:2px;min-width:0}
+.fk-cell .input{width:100%;text-align:center}
+.fk-cell .err-text{color:var(--color-danger, #b42318);line-height:1.4}
+.fk-type{display:flex;gap:4px;align-items:center;height:36px}
+.fk-type .chip{min-width:46px;justify-content:center}
+.fk-del{display:flex;align-items:center;height:36px}
+.fk-open,.fk-default{display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
+.fk-open.on{min-height:36px;font-weight:700;font-size:14px}
+.fk-sample{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--radius-md);background:var(--color-bg-subtle, #f6f1e7)}
+.fk-sample .input{width:120px;text-align:center}
+@media (max-width:640px){
+  .fk-head{display:none}
+  .fk-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 36px;grid-template-areas:"idx idx del" "from to to" "add add type";row-gap:8px;column-gap:10px}
+  .fk-lab{display:block}
+  .fk-idx{grid-area:idx;line-height:24px}
+  .fk-idx::before{content:'الشريحة '}
+  .fk-from{grid-area:from}.fk-to{grid-area:to}.fk-add{grid-area:add}
+  .fk-type{grid-area:type;align-self:end;height:36px}
+  .fk-del{grid-area:del;height:24px;justify-content:flex-end}
+  .fk-type{grid-column:auto}
+}
+.fl-fake{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 12px;border:1px solid var(--color-border-subtle);border-radius:var(--radius-md);background:var(--color-bg-subtle, #f6f1e7)}
+.fl-fake .fl-fake-text{flex:1 1 240px;min-width:0}
+@media (max-width:640px){
+  .fk-row{grid-template-columns:minmax(0,1fr) 36px;row-gap:8px}
+  .fk-from{flex-direction:row;align-items:center;gap:8px;grid-column:1 / -1}
+  .fk-from b{line-height:1.4}
+  .fk-to,.fk-add{grid-column:1 / 2}
+  .fk-row > .icon-btn,.fk-row > button:last-child{grid-row:2;grid-column:2}
+}
+
+/* the edit page (comments decisions 53–55 — the owner 15 Nov: «نظبط ال ui بشكل منظم و احترافي»): the tab's cards beside one rail
+   (the status card + the product's summary) on every tab; sections inside «البيانات الأساسية»; the price as three fields in a row
+   with its figures in boxes under them */
+#pg-products .pe-layout>.pe-main,#pg-products .pe-layout>.pe-rail{gap:16px}
+@media (min-width:1280px){.pe-layout>.pe-rail{position:sticky;top:108px}}
+.pe-sec{display:flex;flex-direction:column;gap:12px}
+.pe-sec+.pe-sec{padding-top:16px;border-top:1px solid var(--color-border-subtle)}
+.pe-sec-h{margin:0;font-size:13px;line-height:20px;font-weight:600;color:var(--color-text-secondary)}
+.pe-sum{grid-template-columns:auto minmax(0,1fr);gap:10px 16px;margin:0;align-items:center}
+.pe-sum dt{white-space:nowrap}
+.pe-sum dd{display:flex;justify-content:flex-end;text-align:end;min-width:0;overflow-wrap:anywhere}
+.pe-jump{display:flex;justify-content:flex-end;padding-top:12px;border-top:1px solid var(--color-border-subtle)}
+.pe-prices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start}
+.pe-prices.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.pe-formula{margin:8px 0 0}
+.pe-boxes{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.pe-box{display:flex;flex-direction:column;gap:4px;min-width:0;padding:12px 16px;border:1px solid var(--color-border-subtle);border-radius:var(--radius-md);background:var(--color-bg-container)}
+.pe-box .t-small{color:var(--color-text-secondary)}
+.pe-box b{font-size:18px;line-height:26px}
+.pe-box.brand b{color:var(--color-brand-default)}
+.pe-img-acts{margin-bottom:4px}
+/* the variations' table needs the page's width: its rail goes under it, the two cards side by side */
+.pe-layout[data-pe="variants"]{flex-direction:column}
+.pe-layout[data-pe="variants"]>.pe-main{width:100%}
+.pe-layout[data-pe="variants"]>.pe-rail{flex:1 1 auto;width:100%;position:static}
+@media (min-width:768px){#pg-products .pe-layout[data-pe="variants"]>.pe-rail{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}}
+@media (max-width:767px){.pe-prices,.pe-prices.two{grid-template-columns:1fr}.pe-boxes{grid-template-columns:1fr 1fr}
+  .edit-head .actions .pop-anchor{width:auto}.edit-head .actions>.btn{flex:1 1 auto}}
+
+/* comments 15 Nov decision 82: «تعديل سعر منتج» wider, with the makers whose Ibtekr rate moves under the amount */
+.scrim .modal.bp-modal{width:min(920px, calc(100vw - 32px));max-width:min(920px, calc(100vw - 32px))}
+.bp-makers{display:flex;flex-direction:column;gap:12px}
+.bp-mk{border:1px solid var(--color-border-subtle);border-radius:12px;background:var(--color-bg-base);padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.bp-mk-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.bp-mk-who{display:flex;flex-direction:column;gap:2px;min-width:0}
+.bp-mk-who b{font-weight:700;overflow-wrap:anywhere}
+.bp-brands{display:block}
+.bp-scope{flex:none;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;border:1px solid var(--color-border-subtle);white-space:nowrap}
+.bp-scope.whole{background:#005642;color:#F4ECDD;border-color:#005642}
+.bp-scope.cats{background:#F4ECDD;color:#005642;border-color:#005642}
+.bp-scope.price{color:var(--color-text-secondary)}
+.bp-mk-what{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:14px}
+.bp-lab{color:var(--color-text-secondary);font-size:12px;flex:none}
+.bp-cats{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bp-cat{font-size:12px;padding:2px 8px;min-height:0}
+.bp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.bp-move{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:10px;background:var(--color-bg-container);border:1px solid var(--color-border-subtle)}
+.bp-move[data-bp-line="general"]{border-color:#005642}
+.bp-move-name{font-size:12px;color:var(--color-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bp-fromto{display:inline-flex;align-items:baseline;gap:6px;font-size:15px}
+.bp-from{color:var(--color-text-secondary);text-decoration:line-through;text-decoration-thickness:1px}
+.bp-to{font-weight:700;color:#005642}
+.bp-to.down{color:var(--color-error-text)}
+.bp-notes{display:flex;flex-direction:column;gap:2px;border-top:1px dashed var(--color-border-subtle);padding-top:8px}
+.bp-over{color:var(--color-error-text);font-weight:600}
+@media (max-width:767px){.bp-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bp-mk{padding:12px}}
+
+/* the owner 16 Nov («فلتر الشجرة»): a category field = a dropdown-looking button that opens the site's tree */
+.select.cat-field{width:100%;justify-content:space-between;text-align:start}
+.select.cat-field .val{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.cat-field-row{display:flex;gap:6px;align-items:center}
+.cat-field-row .select.cat-field{flex:1 1 auto;min-width:0}
+.cat-field-x{flex:none;width:32px;height:32px;display:grid;place-items:center;border:1px solid var(--color-border-subtle);border-radius:var(--radius-sm,6px);background:var(--color-bg-base);cursor:pointer;color:var(--color-text-secondary)}
+.cat-field-x:hover{background:var(--color-bg-hover);color:#005642;border-color:#005642}
+/* the owner 16 Nov: the bulk bar on what the filter shows — its count and the hint to tick part of it */
+.pbulk-scope{display:flex;flex-direction:column;gap:2px;line-height:1.3}
+.pbulk-scope small{font-size:12px}
+/* the owner 16 Nov: a square picture per category in «مراجعة الأقسام» */
+.cp-pic{flex:none;width:56px;position:relative;display:flex;justify-content:center}
+.cp-head .cp-pic{font-size:12px}
+.cp-img{width:52px;height:52px;padding:0;border:1.5px dashed var(--color-border-default);border-radius:10px;background:var(--color-bg-base);display:grid;place-items:center;overflow:hidden;cursor:pointer;color:#005642}
+.cp-img:hover,.cp-img.drop{border-color:#005642;background:var(--color-bg-hover)}
+.cp-img.has{border-style:solid;border-color:var(--color-border-subtle)}
+.cp-img img{width:100%;height:100%;object-fit:cover;display:block}
+.cp-img[disabled]{cursor:default;opacity:.55}
+.cp-img-0{display:flex;flex-direction:column;align-items:center;gap:2px;line-height:1}
+.cp-img-0 small{font-size:11px;font-weight:600}
+.cp-img-x{position:absolute;top:-6px;inset-inline-end:-2px;width:20px;height:20px;padding:0;display:grid;place-items:center;border:1px solid var(--color-border-subtle);border-radius:50%;background:var(--color-bg-elevated);cursor:pointer;color:var(--color-text-secondary)}
+.cp-img-x:hover{background:var(--color-bg-hover);color:#005642}
+@media (max-width:767px){.cp-pic{width:52px}}
+/* the owner 17 Nov: the «قبل ← بعد» preview of the bulk price popup — product (picture + name), SKU, maker, the value, the sale price */
+.bp-preview{overflow-x:auto}
+.bp-preview table{min-width:640px}
+.bp-preview td:has(> .bp-prod){text-align:start}
+.bp-prod{display:flex;align-items:center;gap:8px;min-width:0;max-width:280px}
+.bp-prod b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.bp-sku{font-size:12px;color:var(--color-text-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
+.bp-maker{display:inline-block;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;padding:2px 10px;border-radius:999px;background:#F4ECDD;color:#005642;border:1px solid rgba(0,86,66,.25)}
+.bp-preview td:nth-last-child(-n+2){white-space:nowrap}

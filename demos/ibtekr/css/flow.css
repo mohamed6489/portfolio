@@ -1,0 +1,348 @@
+/* استوديو المنتجات — التلات حالات (docs/superpowers/plans/2026-11-14-studio-flows.md): the template tables with the reference picture
+   and the checkbox fixed on the right while the rest scrolls, the image units (4 shots + the size drawing), the two upload boxes with
+   their progress, and case 3's photo grid. The stepper, option cards, wizard foot and bulk bar come from studio.css. */
+.fl .fl-card{padding:0;display:flex;flex-direction:column;gap:0}
+.fl .fl-card>:not(.sec-h){margin:12px 16px}
+.fl .fl-card>.sec-h+*{margin-top:16px}
+.fl .sub-h{margin:16px 0 8px}
+.fl-new{display:flex;align-items:flex-end;padding-bottom:4px}
+/* comments decision 35: the brand's row has a help line under its list — its «براند جديد» sits on the list's line, not the help's */
+[data-fl-brand-row] .fl-new{align-items:flex-start;padding:28px 0 0}
+.rate-field{display:flex;flex-direction:column;gap:4px;justify-content:flex-end;padding-bottom:4px}
+.rate-field b{font-size:18px;color:var(--color-brand-default)}
+
+/* the template table: checkbox + reference picture sticky on the right (RTL start), the rest scrolls */
+.fl-scroll{overflow-x:auto;max-width:100%;border:1px solid var(--color-border-subtle);border-radius:var(--radius-md);background:var(--color-bg-base)}
+.fl-table{border-collapse:separate;border-spacing:0;min-width:100%;font-size:13px}
+.fl-table th{position:sticky;top:0;z-index:2;background:var(--color-brand-default);color:var(--color-text-on-brand);font-weight:700;padding:8px;white-space:nowrap;text-align:start}
+.fl-table td{padding:6px 8px;border-bottom:1px solid var(--color-border-subtle);vertical-align:middle;background:var(--color-bg-base)}
+.fl-table tr:nth-child(even) td{background:var(--color-bg-tint)}
+.fl-table .stk{position:sticky;z-index:1}
+.fl-table th.stk{z-index:3}
+.fl-table .c-cb{inset-inline-start:0;width:44px;min-width:44px}
+.fl-table .c-ref{inset-inline-start:44px;width:104px;min-width:104px;box-shadow:-1px 0 0 var(--color-border-subtle)}
+.fl-table tr.row-err td.c-cb{box-shadow:inset 3px 0 0 var(--color-error-base)}
+.fl-in{min-width:120px;height:32px;padding:4px 8px;font:inherit;font-size:13px}
+.fl-in.w-mid{min-width:200px}
+.fl-in.w-wide{min-width:280px;height:auto;min-height:56px;resize:vertical}
+textarea.fl-in{display:block;width:100%}
+.fl-in.is-ai{background:var(--color-warning-bg);border-color:var(--color-warning-border)}
+.fl-num{width:110px;height:32px;padding:4px 8px;font:inherit;text-align:center}
+.fl-info{display:flex;flex-direction:column;gap:2px;min-width:0}
+.fl-info b{font-size:13px}
+.fl-info span,.fl-info small{font-size:12px;color:var(--color-text-secondary)}
+.fl-preview td{white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.thumb.st-sm{width:40px;height:46px}
+.thumb.st-xl{width:280px;height:320px;max-width:100%}
+.thumb.gen{display:grid;place-items:center;font-size:12px;color:var(--color-text-secondary);background:var(--color-bg-tint);border:1px dashed var(--color-border-default)}
+
+/* the images: a unit (a product, or a color of a Variable) = its reference + the 4 shots + the size drawing */
+.fl-units{display:flex;flex-direction:column;gap:12px}
+.fl-unit{border:1px solid var(--color-border-subtle);border-radius:var(--radius-md);background:var(--color-bg-base)}
+.fl-slot[draggable=true]{cursor:grab}
+.fl-feat{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+
+/* the upload: two boxes, each with its progress */
+.fl-boxes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.fl-box{padding:16px;display:flex;flex-direction:column;gap:12px}
+.fl-box-h{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.fl-box-h h2{margin:0;color:var(--color-brand-default)}
+.fl-prog{display:flex;align-items:center;gap:10px}
+.fl-prog .bar{flex:1;height:8px;border-radius:999px;background:var(--color-bg-tint);overflow:hidden}
+.fl-prog .bar i{display:block;height:100%;background:var(--color-brand-default);transition:width .2s}
+.fl-prog b{font-size:12px;min-width:40px;text-align:end}
+.fl-res{display:flex;flex-direction:column;gap:6px}
+.fl-res-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;border:1px solid var(--color-border-subtle);border-radius:var(--radius-md)}
+.fl-res-row.bad{border-color:var(--color-error-border);background:var(--color-error-bg)}
+
+/* case 3: the photos */
+.fl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px}
+.fl-pcard{display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px;border:1px solid var(--color-border-subtle);border-radius:var(--radius-md);background:var(--color-bg-base)}
+
+@media (max-width:1023px){
+  .fl-boxes{grid-template-columns:1fr}
+}
+@media (max-width:599px){
+  .fl-table .c-ref{width:64px;min-width:64px}
+  .fl-table .c-ref .thumb.st-big{width:52px;height:60px}
+  .thumb.st-xl{width:100%;height:auto;aspect-ratio:7/8}
+}
+/* the previews open in a popup (outside #pg-products) */
+.modal .thumb.empty-img{background:var(--color-bg-base);border:1px dashed var(--color-border-default);color:var(--color-text-secondary)}
+.modal .thumb img{width:100%;height:100%;object-fit:cover}
+/* the owner 15 Nov: the photos and the screenshots small, each row with the six dots, the photos beside their screenshots */
+.fl-match{display:grid;grid-template-columns:1fr;gap:16px}
+.fl-match.two{grid-template-columns:1fr 1fr}
+.fl-match-col{display:flex;flex-direction:column;gap:8px;min-width:0}
+.fl-sort{display:flex;flex-direction:column;gap:6px}
+.fl-sort-row{display:flex;align-items:center;gap:8px;height:60px;padding:0 8px;border:1px solid var(--color-border-subtle);border-radius:var(--radius-sm,8px);background:var(--color-bg-elevated,#fff);min-width:0}
+.fl-sort-row.dragging{box-shadow:0 2px 8px rgba(0,0,0,.18);position:relative;z-index:2}
+.fl-sort-n{width:22px;text-align:center;color:var(--color-text-secondary);flex:none}
+.fl-sort-body{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+.fl-sort-thumbs{display:flex;align-items:center;gap:4px;flex:none}
+.fl-sort-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.fl-sort .thumb{width:40px;height:46px;flex:none}
+.fl-sort .thumb img{width:100%;height:100%;object-fit:cover;border-radius:4px}
+@media (max-width:640px){.fl-match.two{grid-template-columns:1fr 1fr;gap:8px}.fl-sort-row{padding:0 4px;gap:4px}.fl-sort-name{display:none}}
+/* the owner 15 Nov: the maker alone — his rate shown with his details, the brand code for the SKU under it */
+.fl-maker-info{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:16px;align-items:stretch;padding:14px 16px;border:1px solid var(--color-border-subtle);border-radius:var(--radius-md,10px);background:var(--color-bg-tint,#f5ecdc)}
+.fl-mk-rate{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;min-width:150px;padding:8px 16px;border-radius:var(--radius-sm,8px);background:var(--color-bg-elevated,#fff);border:1px solid var(--color-brand-default,#005642)}
+.fl-mk-rate b{font-size:28px;line-height:1.2;color:var(--color-brand-default,#005642)}
+.fl-mk-cats{display:flex;flex-direction:column;justify-content:center;gap:6px;min-width:0}
+.fl-mk-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.fl-mk-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:var(--color-bg-elevated,#fff);border:1px solid var(--color-border-subtle);font-size:13px;max-width:100%}
+.fl-mk-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fl-mk-chip b{color:var(--color-brand-default,#005642)}
+.fl-mk-act{display:flex;align-items:center}
+.fl-sku-ex{align-self:center;padding-top:22px}
+@media (max-width:640px){.fl-maker-info{grid-template-columns:1fr}.fl-mk-act .btn{width:100%;justify-content:center}.fl-sku-ex{padding-top:0}}
+/* the owner 15 Nov («في اسكرين الاسعار صلح شكل الجدول و إظهر بيانات المنتج العربي بس»): the prices as a grid, not a <table> — the photo
+   inside the product cell with its Arabic data; on a phone a card each (the product on top, the three prices under it, labelled) */
+.fl-plist{border:1px solid var(--color-border-subtle);border-radius:var(--radius-md);background:var(--color-bg-base)}
+/* no overflow:hidden on these cards — it clipped the ⋮ menus and the dropdowns that open inside them; the corners round on the rows */
+.fl-prow:first-child{border-radius:var(--radius-md) var(--radius-md) 0 0}
+.fl-prow:last-child{border-radius:0 0 var(--radius-md) var(--radius-md)}
+.fl-prow{display:grid;grid-template-columns:40px minmax(220px,1fr) 124px 84px 124px 124px 40px;align-items:center;column-gap:12px;padding:10px 14px;border-bottom:1px solid var(--color-border-subtle);background:var(--color-bg-base)}
+.fl-prow:last-child{border-bottom:0}
+.fl-prow:not(.head):nth-child(odd){background:var(--color-bg-tint)}
+.fl-prow.head{background:var(--color-brand-default);color:var(--color-text-on-brand);font-weight:700;font-size:13px;min-height:48px;padding-block:8px}
+.fl-prow.head .cb{color:inherit}
+.fl-prow.row-err{box-shadow:inset -3px 0 0 var(--color-error-base)}
+.fl-pc{min-width:0;text-align:start}
+.fl-pc.c-rate{text-align:center}
+.fl-pc.c-menu{display:flex;justify-content:center}
+.fl-pc .fl-num{width:100%}
+.fl-pprod{display:flex;align-items:center;gap:12px;min-width:0}
+.fl-pprod .fl-info{flex:1;min-width:0}
+.fl-pprod .fl-info b{overflow-wrap:anywhere}
+.thumb.fl-pthumb{width:56px;height:64px;flex:none;border-radius:var(--radius-sm,8px);overflow:hidden}
+.thumb.fl-pthumb img{width:100%;height:100%;object-fit:cover}
+.fl-plbl,.fl-prate-m{display:none}
+@media (max-width:760px){
+  .fl-prow.head{display:none}
+  .fl-prow{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 8px;padding:12px}
+  .fl-pc.c-cb{flex:none;align-self:center}
+  .fl-pc.c-prod{flex:1 1 0}
+  .fl-pc.c-menu{flex:none;align-self:center}
+  .fl-prow .fl-pc.c-rate{display:none}
+  .fl-pc:not(.c-cb):not(.c-prod):not(.c-menu):not(.c-rate){flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:4px;order:2}
+  .fl-pc.c-menu{order:1}
+  .fl-prow::after{content:'';order:1;flex-basis:100%;height:0}
+  .fl-plbl{display:block;font-size:11px;color:var(--color-text-secondary);font-weight:600}
+  .fl-prate-m{display:block}
+}
+/* the owner 15 Nov («الصور تبقا اليند جمب بعض و يبقا كارت المنتج شكلو منظم»): the photos step — a product card with a head (the photo,
+   the Arabic name, the SKU, the price) and the five pictures in one row, all the same size, each label on one line, the buttons under them */
+.fl-unit.fl-ucard{display:flex;flex-direction:column;align-items:stretch;gap:0;padding:0}
+.fl-uhead{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--color-bg-tint);border-bottom:1px solid var(--color-border-subtle);border-radius:var(--radius-md) var(--radius-md) 0 0}
+.fl-uhead .fl-info{flex:1;min-width:0}
+.fl-uhead .fl-info b{font-size:14px;overflow-wrap:anywhere}
+.fl-uprice{display:flex;flex-direction:column;align-items:flex-end;gap:2px;white-space:nowrap;font-size:13px}
+.fl-uprice s{font-size:12px}
+.fl-umenu{flex:none}
+/* comments decision 50 («خلي الصور تبقي ف النص»): the five slots sit in the middle of the card */
+.fl-shots{display:grid;grid-template-columns:repeat(5,minmax(0,168px));gap:14px;padding:16px;justify-content:center}
+.fl-ucard :is(.fl-slot,.fl-sna){display:flex;flex-direction:column;gap:8px;align-items:stretch;min-width:0}
+.fl-slab{display:block;font-size:12px;font-weight:600;color:var(--color-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center}
+.thumb.fl-shot{width:100%;height:auto;aspect-ratio:7/8;border-radius:var(--radius-sm,8px);background:var(--color-bg-tint)}
+.thumb.fl-shot img{width:100%;height:100%;object-fit:cover}
+.fl-ucard .fl-slot.is-empty .thumb{border:1px dashed var(--color-border-default);background:var(--color-bg-base);color:var(--color-text-secondary)}
+.thumb.fl-shot.na{border:1px dashed var(--color-border-default);background:var(--color-bg-tint);color:var(--color-text-secondary);font-size:12px;text-align:center;padding:10px;line-height:1.5}
+.fl-sacts{display:flex;gap:6px;align-items:center;justify-content:center;min-height:32px}
+.fl-sacts .btn{flex:1;justify-content:center;min-width:0}
+@media (max-width:1023px){.fl-shots{grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;padding:12px}}
+@media (max-width:640px){
+  .fl-uhead{flex-wrap:wrap;padding:10px 12px}
+  .fl-uprice{order:5;flex-basis:100%;flex-direction:row;align-items:baseline;gap:8px;padding-inline-start:40px}
+  .fl-shots{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .fl-sacts .btn{padding-inline:6px;font-size:12px}
+}
+/* the owner 15 Nov («خلي بوباب معاينة الصور اكبر شوية عشان يبين الصور بوضوح و الشيت نفس الكلام»): the two previews of the upload step
+   wider than the 800px popup rule and taller (90%), the pictures five in a row at 7:8 under their product, the sheet's photo bigger */
+.scrim .modal.fl-big{width:min(1180px, calc(100vw - 48px));max-width:min(1180px, calc(100vw - 48px));max-height:90vh;max-height:90dvh}
+.fl-pv{display:flex;flex-direction:column;gap:16px}
+.fl-pv-unit{border:1px solid var(--color-border-subtle);border-radius:var(--radius-md);overflow:hidden;background:var(--color-bg-base)}
+.fl-pv-head{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--color-bg-tint);border-bottom:1px solid var(--color-border-subtle)}
+.fl-pv-head .fl-info b{font-size:14px}
+.fl-pv-shots{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;padding:14px}
+.fl-pv-shot{margin:0;display:flex;flex-direction:column;gap:6px;min-width:0}
+.fl-pv-feat{display:flex;flex-direction:column;gap:6px;width:min(220px,45%);margin-bottom:16px}
+.modal.fl-big .fl-preview{font-size:13px}
+.modal.fl-big .fl-preview td{max-width:320px;padding-block:8px}
+@media (max-width:767px){
+  .scrim .modal.fl-big{width:100%;max-width:100%}
+  .fl-pv-shots{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:10px}
+}
+/* the owner 15 Nov (the data step, his mockup): one card per product — the head (number, brand, SKU, category, weight, what's missing),
+   then the photo on the right, the Arabic column and the English column side by side; a Variable's variations under them */
+.fl-dtools{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--color-text-secondary)}
+.fl-dlist{display:flex;flex-direction:column;gap:16px}
+.fl-dcard{border:1px solid var(--color-border-subtle);border-radius:var(--radius-md);background:var(--color-bg-base)}
+.fl-dcard.has-miss{box-shadow:inset -3px 0 0 var(--color-error-base)}
+.fl-dhead{display:flex;align-items:flex-end;flex-wrap:wrap;gap:10px 14px;padding:12px 16px;background:var(--color-bg-tint);border-bottom:1px solid var(--color-border-subtle);border-radius:var(--radius-md) var(--radius-md) 0 0}
+.fl-dhead>.cb{align-self:center}
+.fl-dnum{font-size:15px;align-self:center;color:var(--color-brand-default)}
+.fl-dhead>.tg{align-self:center}
+/* a read-only fact in the head is built like a field — a label line, then a value as tall as a control — so every label of the head is on one line and every value on the next (decision 44) */
+.fl-dbrand{display:flex;flex-direction:column;gap:4px;min-width:0}
+.fl-dbrand small{font-size:12px;font-weight:600;line-height:20px;color:var(--color-text-secondary);display:flex;align-items:center}
+/* a dropdown's label took the kit's taller line — 4px above the labels beside it */
+.fl-f>label,.fl-pick .field>label{line-height:20px}
+.fl-dbrand b{font-size:13px;height:36px;display:flex;align-items:center}
+.fl-dhead .fl-f{min-width:0}
+.fl-dhead .fl-sku{width:170px}
+.fl-dhead .fl-w{width:96px}
+.fl-dhead .fl-cat{width:min(320px,100%)}
+.fl-dmiss{align-self:center;font-size:12px;color:var(--color-error-base);max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fl-dok{align-self:center;display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--color-brand-default);font-weight:600}
+/* the card's own ⋮ only — not the dropdown inside a field (comments decision 44: «القسم» sat in the middle of its field, away from its label) */
+.fl-dhead>.pop-anchor:last-child{align-self:center}
+.fl-dbody{display:grid;grid-template-columns:150px minmax(0,1fr) minmax(0,1fr);gap:18px;padding:16px}
+.fl-dpic{display:flex;flex-direction:column;gap:6px;align-items:center}
+.thumb.fl-dimg{width:150px;height:172px;border-radius:var(--radius-sm,8px)}
+.thumb.fl-dimg img{width:100%;height:100%;object-fit:cover}
+.fl-dcol{display:flex;flex-direction:column;gap:10px;min-width:0}
+.fl-dcol[lang=ar]{padding-inline-end:18px;border-inline-end:1px solid var(--color-border-subtle)}
+.fl-pick .select{width:100%}
+.fl-dcol-h{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;letter-spacing:.02em;color:var(--color-brand-default);text-transform:uppercase}
+.fl-f{display:flex;flex-direction:column;gap:4px;min-width:0}
+.fl-f>label,.fl-pick .field>label{font-size:12px;font-weight:600;color:var(--color-text-secondary);display:flex;align-items:center;gap:6px}
+.fl-f .fl-in{width:100%;min-width:0;height:36px}
+.fl-f textarea.fl-in{height:auto;min-height:84px;resize:vertical;line-height:1.6}
+.fl-pick .field{margin:0;gap:4px}
+.fl-pick.is-ai .select{background:var(--color-warning-bg);border-color:var(--color-warning-border)}
+.fl-aitag{font-size:10.5px;font-weight:600;color:var(--color-warning-text,#8a5a00);background:var(--color-warning-bg);border:1px solid var(--color-warning-border);border-radius:999px;padding:0 6px;line-height:16px}
+.fl-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.fl-trans{font-size:11.5px;font-weight:600;color:var(--color-text-secondary);text-transform:none}
+.fl-vars{border-top:1px solid var(--color-border-subtle);padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+.fl-vars-h{font-size:12px;font-weight:700;color:var(--color-brand-default)}
+.fl-var{display:grid;grid-template-columns:44px 150px repeat(4,minmax(0,1fr)) 80px 32px;gap:10px;align-items:end;padding:8px;border-radius:var(--radius-sm,8px);background:var(--color-bg-tint)}
+.fl-var .thumb.fl-pthumb{width:44px;height:50px;align-self:center}
+.fl-var.row-err{box-shadow:inset -3px 0 0 var(--color-error-base)}
+@media (max-width:1023px){
+  .fl-dbody{grid-template-columns:110px minmax(0,1fr) minmax(0,1fr);gap:12px;padding:12px}
+  .thumb.fl-dimg{width:110px;height:126px}
+  .fl-var{grid-template-columns:44px repeat(3,minmax(0,1fr))}
+}
+@media (max-width:760px){
+  .fl-dbody{grid-template-columns:1fr}
+  .fl-dpic{flex-direction:row;justify-content:flex-start}
+  .thumb.fl-dimg{width:96px;height:110px}
+  .fl-dcol[lang=ar]{padding-inline-end:0;border-inline-end:0;padding-bottom:14px;border-bottom:1px solid var(--color-border-subtle)}
+  .fl-dhead .fl-sku,.fl-dhead .fl-cat{width:100%}
+  .fl-var{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .fl-var .thumb.fl-pthumb{grid-column:1 / -1}
+}
+/* the owner 15 Nov («خلي الصور والسكرين شوتس قد بعض … الصور بتتحط جوا نفس السكشن … وأقدر أغيّر الترتيب بحيث كل صورة قدام الصورة
+   بتاعتها»): the two cards of step 1 on one grid — title · buttons · list · notes are shared rows (subgrid), so the two cards are the same
+   size and the two lists start on the same line, row facing row; empty, each list is the same dashed box */
+.fl-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto auto 1fr auto;column-gap:16px;align-items:stretch}
+.fl .fl-pair>.fl-card{grid-row:span 4;display:grid;grid-template-rows:subgrid;row-gap:0;min-width:0}
+.fl-pair-acts{display:flex;flex-direction:column;gap:10px;align-self:start}
+.fl-pair-list{min-width:0}
+.fl-pair-notes{align-self:end}
+.fl-list-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:132px;height:100%;border:1px dashed var(--color-border-default);border-radius:var(--radius-sm,8px);background:var(--color-bg-tint);color:var(--color-text-secondary);font-size:13px;text-align:center;padding:12px}
+.fl-sort-row.ro{padding-inline-start:12px}
+.fl-sort-row.ro .fl-sort-body{flex-direction:column;align-items:flex-start;gap:2px}
+.fl-sort-row.ro .fl-sort-name{display:block;font-size:13px;color:var(--color-text-primary)}
+@media (max-width:760px){
+  .fl-pair{grid-template-columns:minmax(0,1fr);grid-template-rows:none;row-gap:16px}
+  .fl .fl-pair>.fl-card{grid-row:auto;display:flex;flex-direction:column}
+  .fl-list-empty{min-height:96px}
+}
+/* the owner 15 Nov: «أعد الكتابة بالـ AI» beside the name and the description labels of both columns */
+/* the owner 15 Nov: drag & drop — a card with files over it shows where they land */
+.fl [data-fl-drop].is-drop{outline:2px dashed var(--color-brand-default,#005642);outline-offset:-2px}
+.fl [data-fl-drop].is-drop .fl-pair-list,.fl [data-fl-drop].is-drop .fl-list-empty{background:var(--color-bg-brand-subtle,#e3efe9);border-color:var(--color-brand-default,#005642)}
+/* the owner 15 Nov: the AI rewrite inside the field — a sparkle at its end, «إعادة كتابة» on hover */
+.fl-inwrap{position:relative;min-width:0}
+.fl-inwrap>.fl-in{width:100%;padding-inline-end:36px}
+.fl-rw-in{position:absolute;inset-inline-end:5px;top:50%;transform:translateY(-50%);width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:999px;background:transparent;color:var(--color-brand-default,#005642);cursor:pointer;padding:0}
+.fl-inwrap.is-area>.fl-rw-in{top:5px;transform:none}
+.fl-rw-in:hover:not(:disabled),.fl-rw-in:focus-visible{background:var(--color-brand-default,#005642);color:var(--color-text-on-brand,#fff7ef)} /* the owner 15 Nov: green round, beige icon */
+.fl-rw-in:disabled{opacity:.55;cursor:default}
+.fl-rw-in[data-tip]:hover::after,.fl-rw-in[data-tip]:focus-visible::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 4px);inset-inline-end:0;white-space:nowrap;background:var(--color-text-primary,#1d1d1b);color:var(--color-bg-base,#fff);font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;pointer-events:none;z-index:5}
+.fl-rw-in.is-busy svg{animation:fl-spin 1s linear infinite}
+@keyframes fl-spin{to{transform:rotate(360deg)}}
+/* the owner 15 Nov: a filled shot — «تعديل» (pins) and «إعادة توليد» side by side, the bin under them */
+.fl-sacts{flex-wrap:wrap}
+.fl-sacts [data-shot-regen]{flex:1 1 100%;order:-1}
+.fl-sacts [data-shot-edit]{flex:1 1 0}
+/* the pin editor: the image large with numbered points, the comments beside it */
+.fl-pin-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;align-items:start}
+.fl-pin-stage{position:relative;cursor:crosshair;border-radius:var(--radius-sm,8px);overflow:hidden;background:var(--color-bg-tint)}
+.fl-pin-stage .thumb.fl-pin-img{display:block;width:100%;height:auto;aspect-ratio:7/8;pointer-events:none}
+.fl-pin-stage .thumb.fl-pin-img img{width:100%;height:100%;object-fit:contain}
+.fl-pin{position:absolute;transform:translate(-50%,-50%);width:28px;height:28px;border-radius:50% 50% 50% 4px;background:var(--color-error-base,#c0392b);color:#fff;border:2px solid var(--color-bg-base,#fff);font-weight:700;font-size:13px;display:grid;place-items:center;box-shadow:var(--shadow-popover);cursor:pointer;padding:0}
+.fl-pin.sm{position:static;transform:none;flex:none}
+.fl-pin-side{display:flex;flex-direction:column;gap:10px;min-width:0}
+.fl-pins{display:flex;flex-direction:column;gap:8px}
+.fl-pin-row{display:flex;align-items:center;gap:8px}
+.fl-pin-row .input{flex:1;min-width:0}
+@media (max-width:760px){.fl-pin-grid{grid-template-columns:1fr}.fl-pin{width:32px;height:32px}}
+
+/* the owner 15 Nov: «الشيت» of «صور وعايز شيت» edited in place — compact boxes and dropdowns in the cells */
+.fl-sheet-ed td{white-space:nowrap}
+.fl-sheet-ed .input.sm{height:32px;min-width:120px;width:100%}
+.fl-sheet-ed td:nth-child(3) .input,.fl-sheet-ed td:nth-child(4) .input{min-width:200px}
+.fl-sheet-ed td:nth-child(7) .input{min-width:96px;max-width:120px}
+.fl-sh-sel{min-width:160px}
+.fl-sh-cat{min-width:240px}
+.fl-sh-sel .field{margin:0}
+.fl-sh-sel .field>label:empty{display:none}
+.fl-sh-sel .select{height:32px;min-height:32px}
+/* the owner 15 Nov: a row's picture swapped in the sheet — the thumbnail is a button with a small upload mark */
+.fl-sh-photo{position:relative;display:inline-flex;padding:0;border:0;background:transparent;cursor:pointer;border-radius:8px}
+.fl-sh-photo:disabled{cursor:default;opacity:.7}
+.fl-sh-photo-i{position:absolute;inset-inline-end:-4px;bottom:-4px;width:22px;height:22px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:var(--color-brand-default,#005642);color:var(--color-text-on-brand,#fff7ef);box-shadow:0 0 0 2px var(--color-bg-base,#fff)}
+.fl-sh-photo:hover .thumb,.fl-sh-photo:focus-visible .thumb{outline:2px solid var(--color-brand-default,#005642);outline-offset:1px}
+.fl-sh-photo.is-busy .fl-sh-photo-i svg{animation:fl-spin 1s linear infinite}
+/* «تحميل على الجهاز» (comments decision 36): the popup split in two — the maker's copy and the system's */
+.fl-copies{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:stretch}
+.fl-copy{display:flex;flex-direction:column;gap:10px;padding:16px;border:1px solid var(--color-border-subtle,#f0e5cf);border-radius:12px;background:var(--color-bg-base,#fff7ef);min-width:0}
+.fl-copy[data-fl-copy="maker"]{border-color:var(--color-brand-default,#005642);background:var(--color-bg-container,#f5eddc)}
+.fl-copy-h{display:flex;align-items:center;gap:8px;color:var(--color-brand-default,#005642)}
+.fl-copy-h b{font-size:16px}
+.fl-copy p{margin:0;color:var(--color-text-secondary,#6b6558)}
+.fl-copy-list{margin:0;padding:0 18px 0 0;display:flex;flex-direction:column;gap:4px;font-size:13px;flex:1}
+.fl-copy .btn{align-self:stretch;justify-content:center}
+@media (max-width:640px){.fl-copies{grid-template-columns:1fr}}
+/* the photos list (comments decisions 39–41): a slot for every row — an empty one says so, a missing one in red, a photo with no row «زيادة»; the row's ⋮ at its end */
+.fl-sort-menu{margin-inline-start:auto;flex:none;display:inline-flex}
+.fl-sort-tag{flex:none;display:inline-flex}
+.fl-sort-none{display:inline-flex;align-items:center;gap:6px;color:var(--color-text-secondary);flex:none}
+.fl-sort-row:has(.fl-sort-body.is-empty){border-style:dashed;background:transparent}
+.fl-sort-row:has(.fl-sort-body.is-missing){border-color:var(--color-error-border,#ff887a);background:var(--color-error-bg,#ffeae6)}
+.fl-sort-body.is-missing .fl-sort-none{color:var(--color-error-text,#8e0a07)}
+.fl-sort-row:has(.fl-sort-body.is-extra){border-color:var(--color-error-border,#ff887a)}
+/* the data step's pictures open their popup (comments decision 43): a button over the picture, a pencil at its corner; the popup's two boxes — the maker's photo and the AI's */
+.fl-pic-btn{position:relative;display:inline-flex;padding:0;border:0;background:transparent;cursor:pointer;border-radius:var(--radius-sm,8px);flex:none}
+.fl-pic-btn:hover .thumb,.fl-pic-btn:focus-visible .thumb{outline:2px solid var(--color-brand-default,#005642);outline-offset:1px}
+.fl-pic-i{position:absolute;inset-inline-end:4px;bottom:4px;width:24px;height:24px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:var(--color-brand-default,#005642);color:var(--color-text-on-brand,#fff7ef);box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.fl-var .fl-pic-btn{align-self:center}
+.fl-var .fl-pic-i{width:18px;height:18px;inset-inline-end:-4px;bottom:-4px}
+.fl-var .fl-pic-i svg{width:11px;height:11px}
+.fl-pp{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+.fl-pp-box{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--color-border-subtle);border-radius:12px;background:var(--color-bg-base);min-width:0}
+.fl-pp-h{display:flex;flex-direction:column;gap:2px}
+.thumb.fl-pp-img{width:100%;height:auto;aspect-ratio:7/8;border-radius:var(--radius-sm,8px);background:var(--color-bg-tint);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;color:var(--color-text-secondary);font-size:13px;padding:0}
+.thumb.fl-pp-img img{width:100%;height:100%;object-fit:contain}
+.thumb.fl-pp-img.na{border:1px dashed var(--color-border-default);padding:16px}
+.fl-pp-acts{justify-content:center}
+@media (max-width:640px){.fl-pp{grid-template-columns:1fr}}
+/* the prices step (comments decisions 45, 46): the sale price is shown, not typed; a product's SKU sits under its name on the right (an LTR line in an RTL column went to the left) */
+.fl-num.is-ro{background:var(--color-bg-disabled,#f0e5cf);border-style:dashed;color:var(--color-text-primary);cursor:default}
+.fl-info .num{align-self:flex-start}
+/* an empty slot's two buttons — «ولّد بالـ AI» and «رفع» (decision 48) */
+.fl-sacts [data-gen]{flex:1 1 0;min-width:0;padding-inline:6px}
+.fl-sacts [data-shot-up]{flex:0 0 auto;padding-inline:8px}
+/* Magnific in the photos step (comments decision 49): a bar over the products — the three steps in a row */
+.fl-mg{display:flex;flex-direction:column;gap:10px;padding:12px 14px;margin-bottom:12px;border:1px solid var(--color-border-subtle);border-radius:12px;background:var(--color-bg-container)}
+.fl-mg-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--color-brand-default)}
+.fl-mg-h small{color:var(--color-text-secondary)}
+.fl-mg .acts-inline{flex-wrap:wrap;align-items:center}
+.fl-mg .field{margin:0;min-width:180px}
+/* ش38 (the owner 17 Nov): a price box — typed as text, «ج.م» always written beside it */
+.fl-money{display:inline-flex;align-items:center;gap:6px;width:100%}
+.fl-money>.input{flex:1 1 auto;min-width:0}
+.fl-cur{flex:none;font-size:12px;color:var(--color-text-secondary);white-space:nowrap}

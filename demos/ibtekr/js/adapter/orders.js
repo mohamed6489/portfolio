@@ -1,0 +1,693 @@
+// Orders (phase 2): the last 12 months of orders_v (its customer_phone is already masked for a role without
+// sensitive.customer_phone) with their lines (order_items; removed ones are never shown), the Dokan sub-orders, the
+// vendors' names, the shown products' images and status_map → block 29's screen shape (toScreen, pure), handed to
+// OrdersApp.hydrate (block 29 may also read data() when it starts after the load). data() is null until a load succeeded;
+// state() is 'idle' | 'loading' | 'ready' | 'error' (each change dispatches ib:orders; data() keeps the last good load, and
+// load() may be called again to retry). A row that repeats across two pages (an order placed mid-load) is kept once.
+// `age` counts days from the order's local date to today() — the real local date, never IBKit.TODAY (the prototype's
+// fixed date); never below 0. `cnote` is orders.customer_note, the customer's checkout note (read-only, like name and phone).
+// A line's `link` is its product's page on the website: products.permalink (https only, by sku), else <origin>/?p=<product_id>
+// (WordPress redirects it to the product) with the origin of any known permalink, else '' (no link).
+// `state` is orders.customer_state, the governorate's code on the website's own list (e.g. EG-01) or ''; `stateName` its name
+// from woo_states (code → name, read once per load() — an empty or unreadable table is no error; the sync fills it from the
+// website), else the code itself, else ''. A sub's `rate` / `fee` are the line's commission_rate / commission_fee (phase 3).
+// Grants are column lists (0007): every read names its columns (select('*') on orders / order_items / sub_orders is
+// refused) and every write is an update of granted columns without .select() (return=minimal). The base table orders
+// is never read: its phone column is not granted.
+// Writes are write-through (block 29 changes its own copy first, then calls IBOrdersStore = IBOrders): 42501 →
+// { ok:false, reason:'forbidden' }, any other failure → { ok:false, reason:'network' }, never thrown; a success is
+// logged with K.logEvent, ids and statuses only. setOrderStatus then asks woo-sync to push the status to WooCommerce and
+// answers its result in `push` ('ok' | 'skipped' | 'error') without failing the write.
+// «مكتمل» with extra.rating { sat, manners, note } (phase 3.6) goes through RPC order_complete instead (the rating and the
+// status in one transaction; 22023 → reason 'invalid'), logged as order.rating with the two figures only, then pushed the same way.
+// deleteOrder(id, reason, { cancel }) (phase 5.5 decision 10): cancel first when asked (the same reason), woo-sync order_trash (the site's
+// trash, never a permanent delete), then RPC order_delete marks the row deleted (never a row deleted here); logged as order.delete with the
+// site's answer; 22023 → 'invalid', P0002 → 'missing', a Woo failure → 'site' (nothing deleted). A Realtime refetch that finds no row drops the order.
+// A sub's `n` is its order_items id (block 29 finds a sub by n across every order: allSub/editSub), `itemId` the same
+// as text — the id the item writes take. subscribe() adds Realtime INSERT/UPDATE on orders / order_items / sub_orders
+// (skipped with IB_CONFIG.realtime === false): each event re-reads that order from orders_v (a payload from orders
+// never carries the phone) with its lines and sub-orders, rebuilds it, hands it to OrdersApp.applyOrder and
+// dispatches ib:notify (one per 250 ms burst); an order the screen does not have and placed before the 12-month window is
+// left out. The channel subscribed again after the socket was down → one load() (the events missed meanwhile).
+// clear() (IBDirectory.clear) unsubscribes and drops everything (state 'idle'); a load in flight is abandoned.
+(function () {
+  'use strict';
+  const PAGE = 1000, CAP = 5000, IDS = 200, SKUS = 100; // PostgREST max_rows; ids / skus per in.(…) keep the URL short
+  const COLS = {
+    order: 'id, customer_name, customer_phone, customer_state, customer_city, customer_address, payment_method, payment_title, status, woo_status, confirm, confirm_at, deposit, total, note, customer_note, placed_at, cancel, ret',
+    item: 'id, order_id, sub_order_id, product_id, sku, name, qty, total, vendor_id, status, expected_at, comment, ready_at, waybill, pulled, ret, store, removed, commission_rate, commission_fee',
+    sub: 'id, order_id, vendor_id, woo_order_id, woo_status',
+  };
+  let orders = null; let custom = new Map(); let vendorRows = []; let leads = new Map(); let images = {}; let links = {}; let states = new Map(); let statuses = []; let names = []; let channel = null; let gen = 0; let st = 'idle';
+  const asked = new Set(); // skus already asked of products
+  const busy = new Map(); // order id → its running Realtime refetch
+  const c = () => (window.IBSupabase && window.IBSupabase.client) || null;
+  const uid = () => { const s = window.IBAuth && window.IBAuth.session(); return (s && s.user && s.user.id) || null; };
+  const quiet = (fn) => { try { return fn(); } catch (e) { return undefined; } };
+  // block 29's hooks: an error there must not stop the load or the ib:notify, but it is not hidden either (thrown later)
+  const report = (fn) => { try { fn(); } catch (e) { if (typeof window.setTimeout === 'function') window.setTimeout(() => { throw e; }, 0); } };
+  const notify = () => { document.dispatchEvent(new Event('ib:notify')); };
+  // Realtime refetches: one ib:notify per burst (NOTIFY_MS after the first of them), so a bulk sync does not redraw the
+  // dashboard / the bell per order. No timer function (a bare test context): at once.
+  const NOTIFY_MS = 250; let notifyT = null;
+  const notifySoon = () => {
+    if (typeof window.setTimeout !== 'function') return notify();
+    if (notifyT === null) notifyT = window.setTimeout(() => { notifyT = null; notify(); }, NOTIFY_MS);
+  };
+  const cancelNotify = () => { if (notifyT !== null && typeof window.clearTimeout === 'function') window.clearTimeout(notifyT); notifyT = null; };
+  const setState = (v) => { if (st === v) return; st = v; document.dispatchEvent(new Event('ib:orders')); };
+  const has = (o, k) => !!o && o[k] !== undefined;
+
+  // ---------- the screen shape (pure) ----------
+  const pad = (n) => String(n).padStart(2, '0');
+  const ymd = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  const local = (iso) => { const d = new Date(iso || NaN); return isNaN(d) ? null : d; }; // the browser's clock (Africa/Cairo)
+  const today = () => ymd(new Date()); // the real local date, 'YYYY-MM-DD'
+  const windowStart = () => { const d = new Date(); d.setMonth(d.getMonth() - 12); return d; }; // the oldest placed_at shown
+  const localDate = (iso) => { const d = local(iso); return d ? ymd(d) : ''; };
+  const localStamp = (iso) => { const d = local(iso); return d ? ymd(d) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) : ''; };
+  // block 29's 'YYYY-MM-DD HH:MM' (local clock) → ISO; '' / null → null
+  const toIso = (s) => { if (!s) return null; const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/.exec(s); const d = m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]) : new Date(s); return isNaN(d) ? null : d.toISOString(); };
+  const utc = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || ''); return m ? Date.UTC(+m[1], m[2] - 1, +m[3]) : NaN; };
+  const days = (from, to) => { const n = Math.round((utc(to) - utc(from)) / 864e5); return Number.isFinite(n) ? Math.max(0, n) : 0; };
+  const byName = (a, b) => { const x = a.toLowerCase(), y = b.toLowerCase(); return x < y ? -1 : x > y ? 1 : 0; };
+  const HTTPS = /^https:\/\//;
+  const originOf = (lk) => { for (const k of Object.keys(lk || {})) { const m = typeof lk[k] === 'string' && /^https:\/\/[a-z0-9.-]+(:\d+)?(?=[/?#]|$)/i.exec(lk[k]); if (m) return m[0]; } return ''; };
+  const linkOf = (it, lk, origin) => { const p = it.sku && lk[it.sku]; if (typeof p === 'string' && HTTPS.test(p)) return p; const id = String(it.product_id == null ? '' : it.product_id); return origin && /^[1-9]\d{0,15}$/.test(id) ? origin + '/?p=' + id : ''; };
+  // sid = the website's number for the line's sub-order: Dokan's sub-order id when the line is linked to one, else the
+  // parent order's own id (Dokan makes no sub-order for a single-maker order, and the n8n → Airtable automation sends
+  // the parent id as its "Sub Order ID" in that case). Never the line id: that number exists nowhere on the website.
+  // rate / fee: the website's own commission on the line at the time of the order (order_items.commission_rate / commission_fee,
+  // phase 3; null when the sync has none) — IBVendors.stats reads them for the maker's share; block 29 ignores them.
+  // vendorId (phase 3.2, decision 4): the store's vendors uuid of the line (its own vendor_id, else its sub-order's) as a string, null
+  // when neither has one — IBVendors.stats hands it to storeOwnerAt / rateFor (the maker who owned the store's brand that day); `vendor`
+  // stays the store's name for the orders page.
+  const numOrNull = (v) => (v == null || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null);
+  function sub(it, o, subById, vname, lk, origin) {
+    const so = it.sub_order_id == null ? null : subById.get(String(it.sub_order_id)) || null;
+    const vid = it.vendor_id || (so && so.vendor_id);
+    return { n: Number(it.id), itemId: String(it.id), sid: so && so.woo_order_id != null ? String(so.woo_order_id) : String(o.id), oid: String(o.id), prod: it.name || '', qty: Number(it.qty) || 0, tot: Number(it.total) || 0,
+      raw: (so && so.woo_status) || o.woo_status || '', vendor: (vid && vname.get(String(vid))) || '', vendorId: vid ? String(vid) : null, cm: it.comment || '', ss: it.status || '', exp: it.expected_at || '', sku: it.sku || '', link: linkOf(it, lk, origin),
+      readyAt: localStamp(it.ready_at), waybill: it.waybill || null, pulled: !!it.pulled, ret: it.ret || null, store: it.store || null, rate: numOrNull(it.commission_rate), fee: numOrNull(it.commission_fee) };
+  }
+  // phase 13 decision 52: a line's making days — the product's own (product_lead_days by product_id), else the maker's «مدة التجهيز»
+  // (vendors.lead_days), else 7 (IbtekrOps.leadOf); leadSrc says which. pid = the WooCommerce product of the line.
+  function withLead(s, it, vlead, pl) {
+    const pid = it.product_id == null ? null : String(it.product_id); const own = pid && pl.has(pid) ? pl.get(pid) : null;
+    const maker = s.vendorId && vlead.has(s.vendorId) ? vlead.get(s.vendorId) : null; const ops = window.IbtekrOps;
+    s.pid = pid; s.lead = ops && ops.leadOf ? ops.leadOf(own, maker) : (own || maker || 7); s.leadSrc = own ? 'product' : maker ? 'maker' : 'default';
+    return s;
+  }
+  const text = (v) => (v == null ? '' : String(v).trim());
+  // woo_states rows ({ code, name }) → Map code → name (a row without a code or a name is skipped)
+  const stateMap = (rows) => new Map((Array.isArray(rows) ? rows : []).map((r) => [text(r && r.code), text(r && r.name)]).filter(([k, v]) => k && v));
+  // orders_v rows + their order_items / sub_orders rows + vendors ({ id, name }) → the orders of block 29; ages up to
+  // opts.today ('YYYY-MM-DD'), by default today(); the lines' links from opts.links (sku → permalink); the governorates'
+  // names from opts.states (a Map code → name, or woo_states rows)
+  function toScreen(rows, items, subs, vendors, opts = {}) {
+    const T = (opts && opts.today) || today();
+    const lk = (opts && opts.links) || {}; const origin = originOf(lk);
+    const sn = opts && opts.states && typeof opts.states.get === 'function' ? opts.states : stateMap(opts && opts.states);
+    const vname = new Map((vendors || []).map((v) => [String(v.id), v.name || '']));
+    const vlead = new Map((vendors || []).map((v) => [String(v.id), v.lead_days == null ? null : Number(v.lead_days)]));
+    const pl = opts && opts.leads && typeof opts.leads.get === 'function' ? opts.leads : new Map();
+    const cu = opts && opts.custom && typeof opts.custom.get === 'function' ? opts.custom : new Map();
+    const subById = new Map((subs || []).map((s) => [String(s.id), s]));
+    const lines = new Map();
+    (items || []).filter((it) => !it.removed).sort((a, b) => Number(a.id) - Number(b.id)).forEach((it) => { const k = String(it.order_id); if (!lines.has(k)) lines.set(k, []); lines.get(k).push(it); });
+    return (rows || []).map((r) => {
+      const id = String(r.id); const date = localDate(r.placed_at); const state = text(r.customer_state); const stateName = (state && text(sn.get(state))) || state;
+      return { id, name: r.customer_name || '', phone: r.customer_phone || '', pay: r.payment_title || r.payment_method || '', date, st: r.status, cf: r.confirm, dep: Number(r.deposit) || 0, tot: Number(r.total) || 0,
+        age: days(date, T), note: r.note || '', cnote: r.customer_note || '', cdate: r.confirm_at || '', confAt: r.confirm_at || '', state, stateName, city: r.customer_city || '', addr: r.customer_address || '', cancel: r.cancel || null, ret: r.ret || null,
+        ...(cu.get(id) ? { stc: cu.get(id) } : {}), // 0095: an added status «بتتحسب زي» its base (st stays the base)
+        subs: (lines.get(id) || []).map((it) => withLead(sub(it, r, subById, vname, lk, origin), it, vlead, pl)) };
+    });
+  }
+  const vendorNames = (list) => [...new Set(list.flatMap((o) => o.subs.map((s) => s.vendor)).filter(Boolean))].sort(byName);
+
+  // ---------- load ----------
+  const data = () => (orders ? { orders, vendors: names, images, links, statuses } : null);
+  const keep = (p) => { if (p.image_url) images[p.sku] = p.image_url; if (typeof p.permalink === 'string' && HTTPS.test(p.permalink)) links[p.sku] = p.permalink; }; // a products row → images / links
+  // phase 5: the mirror holds the WPML Arabic translations too (same sku) — they go first, so the default language's row wins
+  const keepAll = (rows) => rows.slice().sort((a, b) => (b.lang === 'ar') - (a.lang === 'ar')).forEach(keep);
+  const stale = (g) => { if (g !== gen) throw new Error('stale'); };
+  const uniq = (rows) => { const seen = new Set(); return rows.filter((r) => { const k = String(r.id); if (seen.has(k)) return false; seen.add(k); return true; }); };
+  // every page of one query (PostgREST answers at most max_rows); throws the first error, or once clear() ran
+  async function pages(build, g, cap = Infinity) {
+    const rows = [];
+    for (let from = 0; from < cap; from += PAGE) {
+      if (from) stale(g);
+      const { data: d, error } = await build().range(from, from + PAGE - 1);
+      if (error) throw error;
+      rows.push(...(d || []));
+      if (!d || d.length < PAGE) break;
+    }
+    return rows;
+  }
+  // rows of `table` whose `col` is in `list`, asked in chunks of `size`
+  function within(cl, table, cols, col, list, size, g) {
+    const parts = []; for (let i = 0; i < list.length; i += size) parts.push(list.slice(i, i + size));
+    return Promise.all(parts.map((p) => pages(() => cl.from(table).select(cols).in(col, p).order('id', { ascending: true }), g))).then((r) => r.flat());
+  }
+  // phase 13 decision 52: the products' own making days (product_lead_days) for the lines' product ids not asked yet; a refusal
+  // or a project without 0076 leaves the maker's days
+  async function loadLeads(cl, items, g) {
+    const pids = [...new Set((items || []).map((it) => (it.product_id == null ? '' : String(it.product_id))).filter((x) => /^[1-9]\d{0,15}$/.test(x) && !leadAsked.has(x)))];
+    if (!pids.length) return;
+    try {
+      for (let i = 0; i < pids.length; i += IDS) {
+        const part = pids.slice(i, i + IDS);
+        const r = await cl.from('product_lead_days').select('product_id, days').in('product_id', part);
+        stale(g); if (r.error) return;
+        part.forEach((x) => leadAsked.add(x)); (r.data || []).forEach((x) => leads.set(String(x.product_id), Number(x.days)));
+      }
+    } catch (e) { if (e && e.message === 'stale') throw e; }
+  }
+  const leadAsked = new Set();
+  // a product's days changed on the products page (IBProducts.setLeadDays → ib:product-lead): the open lines follow
+  function onLead(ev) {
+    const d = (ev && ev.detail) || {}; const pid = d.productId == null ? '' : String(d.productId); if (!pid || !orders) return;
+    if (d.days == null) leads.delete(pid); else leads.set(pid, Number(d.days)); leadAsked.add(pid);
+    const vlead = new Map(vendorRows.map((v) => [String(v.id), v.lead_days == null ? null : Number(v.lead_days)]));
+    const app = window.OrdersApp;
+    orders.forEach((o) => { let hit = false; o.subs.forEach((x) => { if (x.pid === pid) { withLead(x, { product_id: pid }, vlead, leads); hit = true; } }); if (hit && app && app.applyOrder) report(() => app.applyOrder(o)); });
+    notifySoon();
+  }
+  if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('ib:product-lead', onLead);
+  // opts.quiet (IBLive — 0104): a live re-read of a list that is already shown — no «loading» state, and a failed read keeps it
+  async function load(opts) {
+    const cl = c();
+    if (!cl || !uid()) return;
+    const soft = !!(opts && opts.quiet) && st === 'ready';
+    const g = ++gen;
+    if (!soft) setState('loading');
+    try {
+      const [found, vs, sm, ws] = await Promise.all([
+        pages(() => cl.from('orders_v').select(COLS.order).gte('placed_at', windowStart().toISOString()).order('placed_at', { ascending: false }).order('id', { ascending: false }), g, CAP),
+        pages(() => cl.from('vendors').select('id, name, lead_days').order('id', { ascending: true }), g),
+        cl.from('status_map').select('system_status, woo_status, direction, sort, base').order('sort', { ascending: true }),
+        cl.from('woo_states').select('code, name').order('code', { ascending: true }), // small: the website's list
+      ]);
+      if (sm.error) throw sm.error;
+      stale(g);
+      const rows = uniq(found); // an order placed while paging shifts the next page by one
+      const ids = rows.map((r) => r.id);
+      const [items, subs, cs] = await Promise.all([within(cl, 'order_items', COLS.item, 'order_id', ids, IDS, g), within(cl, 'sub_orders', COLS.sub, 'order_id', ids, IDS, g), customs(cl)]);
+      stale(g);
+      const skus = [...new Set(items.filter((it) => !it.removed && it.sku).map((it) => it.sku))];
+      const ps = await within(cl, 'products', 'sku, image_url, permalink, lang', 'sku', skus, SKUS, g);
+      stale(g);
+      leads = new Map(); leadAsked.clear(); await loadLeads(cl, items, g);
+      vendorRows = vs; statuses = sm.data || []; if (cs) custom = cs; customOk = !!cs; images = {}; links = {}; asked.clear();
+      seenO.clear(); seenI.clear(); remember(rows, items);
+      if (ws && !ws.error) states = stateMap(ws.data); // refused (no grant yet) or down: the last list stays, the codes show without one
+      skus.forEach((s) => asked.add(s)); keepAll(ps);
+      orders = toScreen(rows, items, subs, vendorRows, { links, states, leads, custom }); names = vendorNames(orders);
+      setState('ready');
+      const app = window.OrdersApp; if (app && app.hydrate) report(() => app.hydrate(data()));
+      notify(); // the bell and the dashboard read the orders
+    } catch (e) { if (g === gen && !soft) setState('error'); /* offline or refused: the screen keeps what it had; cleared: 'idle' */ }
+  }
+
+  // ---------- writes ----------
+  const fail = (reason) => ({ ok: false, reason });
+  // «لسه زي ما أنا شايفه» (the owner 15 Nov — docs/superpowers/plans/2026-11-15-live-sync.md decision 3: «غيرت حالة اوردر و عضو تاني غير
+  // حالة نفس الاوردر»). What the member is looking at, as the database holds it: order id → the columns an edit may change, line id →
+  // the same. Every read fills them (IBLive holds the reads while a popup is open or a field is in use, so they stay what is on the
+  // screen); my own saved write moves them on. A write names the old value of each column it changes — update … where id = … and
+  // <column> = <what was on the screen> — so when somebody saved it first no row is written: 'stale', and the order is read again.
+  const SEEN_O = ['status', 'confirm', 'confirm_at', 'note', 'customer_city', 'customer_address', 'deposit'];
+  const SEEN_I = ['status', 'expected_at', 'comment', 'waybill', 'pulled'];
+  const seenO = new Map(); const seenI = new Map(); let customOk = false;
+  const keepSeen = (map, cols) => (r) => { if (!r || r.id == null) return; const o = {}; cols.forEach((k) => { if (r[k] !== undefined) o[k] = r[k]; }); map.set(String(r.id), o); };
+  function remember(rows, items) { (rows || []).forEach(keepSeen(seenO, SEEN_O)); (items || []).forEach(keepSeen(seenI, SEEN_I)); }
+  // the old values of the tracked columns this patch changes (nothing known of the row: no condition — the write goes as before)
+  function wasOf(map, id, patch) { const sn = map.get(String(id)); const w = {}; if (sn) Object.keys(patch).forEach((k) => { if (Object.prototype.hasOwnProperty.call(sn, k)) w[k] = sn[k]; }); return w; }
+  const moveOn = (map, cols, id, patch) => { const sn = map.get(String(id)); if (sn) cols.forEach((k) => { if (Object.prototype.hasOwnProperty.call(patch, k)) sn[k] = patch[k]; }); };
+  const orderOfItem = (itemId) => { const o = (orders || []).find((x) => x.subs.some((sb) => sb.itemId === String(itemId))); return o ? o.id : null; };
+  // 0095 (owner batch 2 decision 22): the orders on an added status — orders.status_custom (a column grant; orders_v as it was) → a Map
+  // id → name; one order (id) or every one on an added status. Not there yet (before 0095) or down: null — the screen keeps the bases
+  async function customs(cl, id) {
+    try {
+      let q = cl.from('orders').select('id, status_custom');
+      q = id != null ? q.eq('id', id) : q.not('status_custom', 'is', null).gte('placed_at', windowStart().toISOString());
+      const { data: d, error } = await q;
+      if (error) return null;
+      return new Map((d || []).filter((r) => r && r.status_custom).map((r) => [String(r.id), String(r.status_custom)]));
+    } catch (e) { return null; }
+  }
+  // an added status → its base («بتتحسب زي»); a base status → itself
+  function baseOf(status) { const r = (statuses || []).find((x) => x && x.system_status === status); return r && r.base ? r.base : status; }
+  // was (optional): { column: the value on the screen } → the row is written only while it still holds them. No row written:
+  // the row is read — changed → 'stale' (and the order is read again for the screen); the same → the write was not mine to make
+  // ('forbidden'); gone → 'missing'. A text longer than 400 characters is not sent as a condition (the address bar's limit).
+  // A row's writes go one after the other, and `was` (a function) is read when its turn comes: the second of two quick changes to
+  // the same field is compared with what the first one left — not with what was on the screen before it. (Sent side by side, the
+  // second named the value the first had just replaced and was refused as «حد تاني غيّر ده» — a teammate nobody was.)
+  const rowQueue = new Map();
+  function update(table, id, patch, was) {
+    const key = table + ':' + id; const prev = rowQueue.get(key) || Promise.resolve();
+    const run = prev.then(() => write(table, id, patch, typeof was === 'function' ? was() : was));
+    const tail = run.then(() => {}, () => {}); rowQueue.set(key, tail);
+    tail.then(() => { if (rowQueue.get(key) === tail) rowQueue.delete(key); });
+    return run;
+  }
+  async function write(table, id, patch, was) {
+    const cl = c();
+    if (!cl || !uid()) return fail('network');
+    // a json column (the waybill) is named by its text — the database compares it as json
+    const lit = (v) => (v !== null && v !== undefined && typeof v === 'object' ? JSON.stringify(v) : v === undefined ? null : v);
+    const cols = was ? Object.keys(was).filter((k) => { const v = lit(was[k]); return !(typeof v === 'string' && v.length > 400); }) : [];
+    const bad = (error) => fail(error.code === '42501' ? 'forbidden' : 'network');
+    try {
+      if (!cols.length) { const { error } = await cl.from(table).update(patch).eq('id', id); if (error) return bad(error); }
+      else {
+        let q = cl.from(table).update(patch, { count: 'exact' }).eq('id', id);
+        cols.forEach((k) => { const v = lit(was[k]); q = v === null ? q.is(k, null) : q.eq(k, v); });
+        const { error, count, status } = await q;
+        // «no row» however the API says it: a count of 0, or its «nothing matched» answers (404 / 406, PGRST116)
+        const none = count === 0 || (!!error && (status === 404 || status === 406 || error.code === 'PGRST116'));
+        if (error && !none) return bad(error);
+        if (none) {
+          const now = await cl.from(table).select(['id'].concat(cols).join(', ')).eq('id', id).maybeSingle();
+          const row = now && !now.error ? now.data : null;
+          const text = (v) => { const x = lit(v); return x === null ? null : String(x); };
+          const same = !!row && cols.every((k) => text(row[k]) === text(was[k]));
+          const oid = table === 'orders' ? String(id) : orderOfItem(id);
+          if (!same && oid != null) quiet(() => refetch(String(oid))); // theirs on the screen
+          return fail(now && now.error ? 'stale' : !row ? 'missing' : same ? 'forbidden' : 'stale');
+        }
+      }
+    } catch (e) { return fail('network'); }
+    if (table === 'orders') moveOn(seenO, SEEN_O, id, patch); else if (table === 'order_items') moveOn(seenI, SEEN_I, id, patch);
+    return { ok: true };
+  }
+  const log = (action, detail) => { const K = window.IBKit; if (K && K.logEvent) quiet(() => K.logEvent(action, detail)); };
+  const itemRef = (itemId) => { const o = (orders || []).find((x) => x.subs.some((s) => s.itemId === String(itemId))); return (o ? 'IB-' + o.id + ' · ' : '') + '#' + itemId; };
+  async function invoke(body) {
+    const cl = c();
+    if (!cl || !uid()) return fail('network');
+    try {
+      const { data: d, error } = await cl.functions.invoke('woo-sync', { body });
+      if (error) { const st = error.context && error.context.status; return fail(st === 401 || st === 403 ? 'forbidden' : 'network'); }
+      return { ok: true, data: d || {} };
+    } catch (e) { return fail('network'); }
+  }
+  // «مكتمل» with the team's rating of the customer (phase 3.6): one RPC writes the rating and the status together
+  // (order_complete — the orders guard decides, as for any status change); the log carries the figures, never the note.
+  // 0105: p_from = the status on the screen — the server refuses (IBSTL) when somebody moved the order first, so two members
+  // completing it together leave one rating. A project without 0105 yet does not know p_from (PGRST202): asked again without it.
+  async function completeOrder(id, rating) {
+    const cl = c();
+    if (!cl || !uid()) return fail('network');
+    const sat = Number(rating && rating.sat), manners = Number(rating && rating.manners);
+    if (![sat, manners].every((n) => Number.isInteger(n) && n >= 1 && n <= 5)) return fail('invalid');
+    const note = rating && typeof rating.note === 'string' && rating.note.trim() ? rating.note.trim() : null;
+    const args = { p_order: Number(id), p_sat: sat, p_manners: manners, p_note: note };
+    const sn = seenO.get(String(id)); const from = sn && typeof sn.status === 'string' ? sn.status : null;
+    try {
+      let r = await cl.rpc('order_complete', from ? Object.assign({ p_from: from }, args) : args);
+      if (r.error && from && r.error.code === 'PGRST202') r = await cl.rpc('order_complete', args);
+      if (r.error && r.error.code === 'IBSTL') { quiet(() => refetch(String(id))); return fail('stale'); }
+      if (r.error) return fail(r.error.code === '42501' ? 'forbidden' : r.error.code === '22023' ? 'invalid' : 'network');
+    } catch (e) { return fail('network'); }
+    moveOn(seenO, SEEN_O, id, { status: 'مكتمل' });
+    log('order.rating', 'IB-' + id + ' · رضا ' + sat + ' · أخلاق ' + manners);
+    return { ok: true };
+  }
+  // «مسح» (phase 5.5 decision 10, the owner 2 Nov): one step — an order that is not «ملغي» is cancelled first (setOrderStatus with the
+  // same reason: the row + push_status), then woo-sync order_trash puts the order and its Dokan sub-orders in the site's trash (ok |
+  // skipped when WOO_PUSH_ENABLED is off | a failure stops here: nothing deleted), then RPC order_delete marks the row deleted
+  // (deleted_at + the reason) — orders_v no longer returns it. 22023 → 'invalid'; P0002 → 'missing'; a Woo failure → 'site'.
+  // Logged as order.delete with the id, the reason and the site's answer; the screen drops the order itself (OrdersApp.removeOrder).
+  async function deleteOrder(id, reason, opts) {
+    const cl = c();
+    if (!cl || !uid()) return fail('network');
+    const why = typeof reason === 'string' ? reason.trim() : '';
+    if (!why || why.length > 120) return fail('invalid');
+    if (opts && opts.cancel) {
+      const cur = (orders || []).find((x) => x.id === String(id));
+      if (!cur || cur.st !== 'ملغي') { const r = await setOrderStatus(id, 'ملغي', { cancel: { reason: why } }); if (!r.ok) return r; }
+    }
+    const t = await invoke({ action: 'order_trash', order_id: Number(id) });
+    if (!t.ok) return fail(t.reason === 'forbidden' ? 'forbidden' : 'site');
+    const site = t.data.result === 'ok' ? 'ok' : t.data.result === 'skipped' ? (t.data.reason || 'skipped') : 'error';
+    if (site === 'error') return fail('site');
+    try {
+      const { error } = await cl.rpc('order_delete', { p_order: Number(id), p_reason: why });
+      if (error) return fail(error.code === '42501' ? 'forbidden' : error.code === '22023' ? 'invalid' : error.code === 'P0002' ? 'missing' : 'network');
+    } catch (e) { return fail('network'); }
+    if (orders) { const i = orders.findIndex((x) => x.id === String(id)); if (i >= 0) { orders.splice(i, 1); names = vendorNames(orders); notifySoon(); } }
+    log('order.delete', 'IB-' + id + ' · ' + why + ' · الموقع: ' + site);
+    return { ok: true, site };
+  }
+  // phase 13 decision 54: «مسح الأوردر الفرعي» — woo-sync suborder_trash (the Dokan sub-order to the site's trash, its lines flagged
+  // here, the hub's holds released — the parent on the site is never written, the owner 11 Nov); the answer's status → 'forbidden'
+  // (401/403) / 'only' (409 only_sub: the page deletes the order instead) / 'closed' (409) / 'missing' (404) / 'site' (502, or skipped)
+  // / 'push_disabled'; ok → the lines leave the order here too; total null = the site's parent kept its total. Logged as suborder.delete
+  // with the sub-order number and the reason.
+  async function deleteSub(orderId, sid, reason) {
+    const cl = c();
+    if (!cl || !uid()) return fail('network');
+    const why = typeof reason === 'string' ? reason.trim() : '';
+    if (!why || why.length > 120) return fail('invalid');
+    let d = null; let status = 0; let code = '';
+    try {
+      const r = await cl.functions.invoke('woo-sync', { body: { action: 'suborder_trash', order_id: Number(orderId), sub_id: Number(sid), reason: why } });
+      d = r.data; if (r.error) { status = (r.error.context && r.error.context.status) || 0; try { const j = r.error.context && r.error.context.json ? await r.error.context.json() : null; code = (j && j.error) || ''; } catch (e) { code = ''; } }
+    } catch (e) { return fail('network'); }
+    if (status) return fail(status === 401 || status === 403 ? 'forbidden' : status === 409 ? (code === 'closed' ? 'closed' : 'only') : status === 404 ? 'missing' : status === 502 ? 'site' : 'network');
+    if (!d || d.result !== 'ok') return fail(d && d.reason === 'push_disabled' ? 'push_disabled' : 'site');
+    const total = d.total != null && Number.isFinite(Number(d.total)) ? Number(d.total) : null;
+    if (orders) { const o = orders.find((x) => x.id === String(orderId)); if (o) { o.subs = o.subs.filter((s) => String(s.sid) !== String(sid)); if (total !== null) o.tot = total; names = vendorNames(orders); notifySoon(); } }
+    log('suborder.delete', '#' + sid + ' (IB-' + orderId + ') · ' + why);
+    return { ok: true, lines: d.lines || 0, total };
+  }
+  // the owner 11 Nov: woo-sync with the HTTP status and the error code read back (the two actions below)
+  async function syncCall(body) {
+    const cl = c();
+    if (!cl || !uid()) return { status: -1 };
+    try {
+      const r = await cl.functions.invoke('woo-sync', { body });
+      if (!r.error) return { data: r.data, status: 0, code: '' };
+      let code = ''; let answer = null; try { const j = r.error.context && r.error.context.json ? await r.error.context.json() : null; answer = j && typeof j === 'object' ? j : null; code = (j && j.error) || ''; } catch (e) { code = ''; }
+      return { status: (r.error.context && r.error.context.status) || 500, code, body: answer };
+    } catch (e) { return { status: -1 }; }
+  }
+  // «مسح المنتج» (the owner 11 Nov — «امسح منتج بعينه من الاوردر»): woo-sync line_trash — the product off its maker's sub-order (the
+  // parent on the site untouched, total null) or, for an order of one maker, off the order itself (its new total); the reasons:
+  // 'only_in_sub' (the page deletes the sub-order) / 'only_line' (the order) / 'closed' /
+  // 'sub_line' (the sub-order's line is not clear) / 'missing' / 'site' / 'push_disabled' / 'forbidden'. Logged as order.line_delete.
+  async function deleteLine(orderId, itemId, reason) {
+    const why = typeof reason === 'string' ? reason.trim() : '';
+    if (!why || why.length > 120) return fail('invalid');
+    const r = await syncCall({ action: 'line_trash', order_id: Number(orderId), item_id: Number(itemId), reason: why });
+    if (r.status === -1) return fail('network');
+    if (r.status) return fail(r.status === 401 || r.status === 403 ? 'forbidden' : r.status === 409 ? (['only_in_sub', 'only_line', 'closed', 'sub_line'].includes(r.code) ? r.code : 'site') : r.status === 404 ? 'missing' : r.status === 502 ? 'site' : 'network');
+    const d = r.data;
+    if (!d || d.result !== 'ok') return fail(d && d.reason === 'push_disabled' ? 'push_disabled' : 'site');
+    const total = d.total != null && Number.isFinite(Number(d.total)) ? Number(d.total) : null;
+    if (orders) { const o = orders.find((x) => x.id === String(orderId)); if (o) { o.subs = o.subs.filter((s) => String(s.itemId) !== String(itemId)); if (total !== null) o.tot = total; names = vendorNames(orders); notifySoon(); } }
+    log('order.line_delete', 'IB-' + orderId + ' · سطر #' + itemId + ' · ' + why);
+    return { ok: true, total, sub: d.sub || null };
+  }
+  // the site statuses a sub-order can take (option «أ», the owner 11 Nov): status_map's rows with a WooCommerce slug
+  function siteStatuses() { return (statuses || []).filter((r) => r && r.woo_status && !r.base).map((r) => ({ slug: r.woo_status, label: r.system_status })); }
+  // a Dokan sub-order's own status on the site — woo-sync suborder_status; the whole sub-order (every product of it) moves together.
+  // Logged as suborder.site_status with the number and the slug.
+  async function setSubSiteStatus(orderId, sid, slug) {
+    if (!siteStatuses().some((x) => x.slug === slug)) return fail('invalid');
+    const r = await syncCall({ action: 'suborder_status', order_id: Number(orderId), sub_id: Number(sid), status: slug });
+    if (r.status === -1) return fail('network');
+    if (r.status) return fail(r.status === 401 || r.status === 403 ? 'forbidden' : r.status === 404 ? 'missing' : r.status === 400 ? 'invalid' : r.status === 502 ? 'site' : 'network');
+    const d = r.data;
+    if (!d || d.result !== 'ok') return fail(d && d.reason === 'push_disabled' ? 'push_disabled' : 'site');
+    if (orders) { const o = orders.find((x) => x.id === String(orderId)); if (o) { o.subs.forEach((s) => { if (String(s.sid) === String(sid)) s.raw = d.status; }); notifySoon(); } }
+    log('suborder.site_status', '#' + sid + ' (IB-' + orderId + ') · ' + d.status);
+    return { ok: true, status: d.status };
+  }
+  // «تعديل الكمية» (the owner 14 Nov — «تعديل كمية في الصب اوردر الفرعي», up or down): woo-sync line_qty — the product's quantity
+  // and value at its piece price on its maker's sub-order (the parent on the site untouched, total null) or, for an order of one maker,
+  // on the order itself (its new total); the reasons: 'same' / 'closed' / 'in_hub' (pulled from the hub, or a piece of it there) /
+  // 'sub_line' / 'missing' / 'site' / 'push_disabled' / 'forbidden' / 'invalid'. Logged as order.line_qty with the two numbers only.
+  async function setLineQty(orderId, itemId, qty, was) {
+    const n = Number(qty);
+    if (!Number.isInteger(n) || n < 1 || n > 99) return fail('invalid');
+    const r = await syncCall({ action: 'line_qty', order_id: Number(orderId), item_id: Number(itemId), qty: n });
+    if (r.status === -1) return fail('network');
+    if (r.status) return fail(r.status === 401 || r.status === 403 ? 'forbidden' : r.status === 409 ? (['same', 'closed', 'in_hub', 'sub_line'].includes(r.code) ? r.code : 'site') : r.status === 404 ? 'missing' : r.status === 400 ? 'invalid' : r.status === 502 ? 'site' : 'network');
+    const d = r.data;
+    if (!d || d.result !== 'ok') return fail(d && d.reason === 'push_disabled' ? 'push_disabled' : 'site');
+    const total = d.total != null && Number.isFinite(Number(d.total)) ? Number(d.total) : null;
+    const lineTotal = d.line_total != null && Number.isFinite(Number(d.line_total)) ? Number(d.line_total) : null;
+    if (orders) { const o = orders.find((x) => x.id === String(orderId)); if (o) { o.subs.forEach((s) => { if (String(s.itemId) === String(itemId)) { s.qty = n; if (lineTotal !== null) s.tot = lineTotal; } }); if (total !== null) o.tot = total; notifySoon(); } }
+    log('order.line_qty', 'IB-' + orderId + ' · سطر #' + itemId + ' · ' + (Number.isFinite(Number(was)) ? Number(was) + ' ← ' : '') + n);
+    return { ok: true, qty: n, lineTotal, total, sub: d.sub || null };
+  }
+  // «+ إضافة منتج» (the owner 14 Nov — «زر اضافة منتج ف ال sub order», the price typed by hand): woo-sync line_add — a product of the
+  // sub-order's maker on that Dokan sub-order only (the parent untouched) or, for an order of one maker, on the order itself; then the
+  // order is read again. { ok, line } or { ok: false, reason }: 'need_variation' (+ variations [{ id, label, price, sku }] to pick
+  // from) / 'other_maker' / 'closed' / 'missing' / 'invalid' / 'site' / 'push_disabled' / 'forbidden'. Logged as order.line_add
+  // (the order, the sub-order, the product id and the count — never the price).
+  async function addLine(orderId, subId, productId, opts) {
+    const o2 = opts || {}; const n = Number(o2.qty); const price = Number(o2.price); const vid = o2.variationId == null || o2.variationId === '' ? null : Number(o2.variationId);
+    if (!Number.isInteger(n) || n < 1 || n > 99 || !(o2.price !== '' && o2.price != null && Number.isFinite(price)) || price < 0 || price > 1000000 || !(Number(productId) > 0) || (vid !== null && !(vid > 0))) return fail('invalid');
+    const body = { action: 'line_add', order_id: Number(orderId), product_id: Number(productId), qty: n, price: Math.round(price * 100) / 100 };
+    if (subId != null && String(subId) !== String(orderId)) body.sub_id = Number(subId);
+    if (vid !== null) body.variation_id = vid;
+    const r = await syncCall(body);
+    if (r.status === -1) return fail('network');
+    if (r.status === 409 && r.code === 'need_variation') return { ok: false, reason: 'need_variation', variations: Array.isArray(r.body && r.body.variations) ? r.body.variations.filter((v) => v && Number(v.id) > 0).map((v) => ({ id: Number(v.id), label: String(v.label || '#' + v.id), price: Number.isFinite(Number(v.price)) ? Number(v.price) : null, sku: v.sku || null })) : [] };
+    if (r.status) return fail(r.status === 401 || r.status === 403 ? 'forbidden' : r.status === 409 ? (['closed', 'other_maker'].includes(r.code) ? r.code : 'site') : r.status === 404 ? 'missing' : r.status === 400 ? 'invalid' : r.status === 502 ? 'site' : 'network');
+    const d = r.data;
+    if (!d || d.result !== 'ok') return fail(d && d.reason === 'push_disabled' ? 'push_disabled' : 'site');
+    refetch(String(orderId));
+    log('order.line_add', 'IB-' + orderId + (body.sub_id ? ' · الفرعي #' + body.sub_id : '') + ' · منتج #' + body.product_id + (vid ? ' / ' + vid : '') + ' · × ' + n);
+    return { ok: true, line: d.line || null, sub: d.sub || null };
+  }
+  // the maker's products for «+ إضافة منتج» — the mirror (0021: orders.view reads it), not the Arabic translations, not in the trash,
+  // no variation rows; the price = the sale price, else the price. { ok, items: [{ id, name, sku, price, type, image }] }
+  async function makerProducts(vendorId) {
+    const cl = c(); if (!cl || !vendorId) return { ok: false, reason: vendorId ? 'network' : 'invalid', items: [] };
+    try {
+      const { data, error } = await cl.from('products').select('id, name, sku, price, sale_price, type, lang, status, trashed_at, image_url').eq('vendor_id', vendorId).limit(1000);
+      if (error) return { ok: false, reason: 'network', items: [] };
+      const items = (data || []).filter((r) => r.lang !== 'ar' && r.trashed_at == null && r.type !== 'variation')
+        .map((r) => ({ id: Number(r.id), name: r.name || '#' + r.id, sku: r.sku || '', price: numOrNull(r.sale_price) != null ? numOrNull(r.sale_price) : numOrNull(r.price), type: r.type || 'simple', image: r.image_url || '' }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return { ok: true, items };
+    } catch (e) { return { ok: false, reason: 'network', items: [] }; }
+  }
+  // status: a base status or an added one (0095 — written as its base + status_custom; status_custom is sent only when it is set or
+  // was set, so a base-only order writes { status } as before). The push names the shown status (woo-sync maps it to its slug).
+  async function setOrderStatus(id, status, extra) {
+    const base = baseOf(status); const added = base !== status ? status : null; const k = String(id); const had = custom.get(k) || null;
+    const keep = () => { if (added) custom.set(k, added); else custom.delete(k); };
+    if (base === 'مكتمل' && extra && extra.rating) {
+      const r = await completeOrder(id, extra.rating);
+      if (!r.ok) return r;
+      if (added || had) { const c2 = await update('orders', id, { status_custom: added }); if (!c2.ok) return c2; }
+      keep();
+      log('order.status', 'IB-' + id + ' · ' + status);
+      const p = await invoke({ action: 'push_status', order_id: Number(id), status });
+      return pushAnswer(id, p);
+    }
+    const patch = { status: base };
+    if (added || had) patch.status_custom = added;
+    if (extra && extra.cancel) patch.cancel = extra.cancel;
+    if (extra && extra.ret) patch.ret = extra.ret;
+    // the status on the screen — and its added one, when those are known (read when the write's turn comes: rowQueue)
+    const was = () => { const w = wasOf(seenO, id, { status: base }); if (customOk && Object.keys(w).length) w.status_custom = custom.get(k) || null; return w; };
+    const r = await update('orders', id, patch, was);
+    if (!r.ok) return r;
+    keep();
+    log('order.status', 'IB-' + id + ' · ' + status);
+    const p = await invoke({ action: 'push_status', order_id: Number(id), status }); // after the row: woo-sync pushes the stored status only
+    return pushAnswer(id, p);
+  }
+  // { ok, push } — and subs (the sub-order numbers the status went to) when the order has sub-orders
+  function pushAnswer(id, p) {
+    const subs = subsPushed(id, p);
+    return Object.assign({ ok: true, push: (p.ok && p.data.result) || 'error' }, subs.length ? { subs } : {});
+  }
+  // the owner 11 Nov («زي الـ automation»): an order with Dokan sub-orders gets the status on each of them, never the parent (Dokan
+  // recreates the sub-orders of a parent edited through the API) — the answer names them (subs + woo_status): «حالة الموقع» follows here;
+  // → the sub-order numbers set (the page redraws only then), else []
+  function subsPushed(id, p) {
+    const d = p && p.ok ? p.data : null;
+    if (!d || !Array.isArray(d.subs) || !d.subs.length || typeof d.woo_status !== 'string') return [];
+    const o = orders ? orders.find((x) => x.id === String(id)) : null;
+    if (o) { const done = new Set(d.subs.map(String)); o.subs.forEach((s) => { if (done.has(String(s.sid))) s.raw = d.woo_status; }); notifySoon(); }
+    return d.subs.slice();
+  }
+  async function setConfirm(id, cf, opts) {
+    const patch = {};
+    if (cf !== undefined && cf !== null) patch.confirm = cf;
+    if (has(opts, 'confAt')) patch.confirm_at = opts.confAt || null;
+    if (has(opts, 'note')) patch.confirm_note = opts.note;
+    if (!Object.keys(patch).length) return { ok: true };
+    const r = await update('orders', id, patch, () => wasOf(seenO, id, patch));
+    if (r.ok) log('order.confirm', 'IB-' + id + (patch.confirm !== undefined ? ' · ' + cf : ''));
+    // 0103 (the owner 15 Nov): the confirmation date fills the lines' «تاريخ تبليغ المبتكر» on the server — the order read again
+    // so the lines show it now (Realtime brings it too, when it is on)
+    if (r.ok && patch.confirm_at) quiet(() => refetch(String(id)));
+    return r;
+  }
+  const FIELDS = { note: 'note', city: 'customer_city', addr: 'customer_address', dep: 'deposit' };
+  async function patchOrder(id, f) {
+    const keys = Object.keys(FIELDS).filter((k) => has(f, k));
+    if (!keys.length) return { ok: true };
+    const dep = !has(f, 'dep') ? 0 : typeof f.dep === 'number' ? f.dep : typeof f.dep === 'string' && f.dep.trim() ? Number(f.dep) : NaN;
+    if (!Number.isFinite(dep)) return fail('invalid'); // never a silent 0
+    const patch = {}; keys.forEach((k) => { patch[FIELDS[k]] = k === 'dep' ? dep : f[k]; });
+    const r = await update('orders', id, patch, () => wasOf(seenO, id, patch));
+    if (r.ok) log('order.patch', 'IB-' + id + ' · ' + keys.join(', ')); // which fields, never their text
+    return r;
+  }
+  async function setItemStatus(itemId, ss, extra) {
+    const patch = {};
+    if (ss !== undefined && ss !== null) patch.status = ss;
+    if (has(extra, 'exp')) patch.expected_at = extra.exp || null;
+    if (has(extra, 'cm')) patch.comment = extra.cm;
+    if (has(extra, 'ret')) patch.ret = extra.ret || null;
+    if (has(extra, 'store')) patch.store = extra.store || null;
+    if (has(extra, 'readyAt')) patch.ready_at = toIso(extra.readyAt);
+    if (!Object.keys(patch).length) return { ok: true };
+    const r = await update('order_items', itemId, patch, () => wasOf(seenI, itemId, patch));
+    if (r.ok) log('suborder.status', itemRef(itemId) + (patch.status !== undefined ? ' · ' + ss : ''));
+    return r;
+  }
+  async function setWaybill(itemId, w) {
+    const wb = { waybill: w == null ? null : w };
+    const r = await update('order_items', itemId, wb, () => wasOf(seenI, itemId, wb));
+    if (r.ok) log('suborder.waybill', itemRef(itemId));
+    return r;
+  }
+  async function setPulled(itemId, on) {
+    const r = await update('order_items', itemId, { pulled: !!on }, () => wasOf(seenI, itemId, { pulled: !!on }));
+    if (r.ok) log('suborder.pulled', itemRef(itemId) + ' · ' + (on ? 'سحب من المتاح' : 'إلغاء السحب'));
+    return r;
+  }
+  async function syncNow() { const r = await invoke({ action: 'all' }); return r.ok ? { ok: true, counts: r.data.counts || {} } : r; }
+  async function registerWebhooks() {
+    const cfg = window.IB_CONFIG || {};
+    const r = await invoke({ action: 'register_webhooks', delivery_url: String(cfg.supabaseUrl || '').replace(/\/+$/, '') + '/functions/v1/woo-webhook' });
+    return r.ok ? { ok: true, list: r.data.webhooks || [] } : r;
+  }
+
+  // ---------- Realtime ----------
+  // vendors and product images / links the maps do not know yet (a maker or a product new since the load)
+  async function fill(cl, items, subs, g) {
+    const known = new Set(vendorRows.map((v) => String(v.id)));
+    const vids = [...new Set(items.concat(subs).map((x) => x.vendor_id).filter((v) => v && !known.has(String(v))))];
+    const skus = [...new Set(items.filter((x) => !x.removed && x.sku && !asked.has(x.sku)).map((x) => x.sku))];
+    const none = { data: [], error: null };
+    const [v, p] = await Promise.all([vids.length ? cl.from('vendors').select('id, name, lead_days').in('id', vids) : none, skus.length ? cl.from('products').select('sku, image_url, permalink, lang').in('sku', skus) : none]);
+    stale(g);
+    if (!v.error) vendorRows = vendorRows.concat(v.data || []);
+    if (!p.error) { skus.forEach((s) => asked.add(s)); keepAll(p.data || []); }
+    await loadLeads(cl, items, g);
+  }
+  async function refresh(id) {
+    const cl = c(); const g = gen;
+    if (!cl || !orders) return;
+    try {
+      const [o, it, so] = await Promise.all([cl.from('orders_v').select(COLS.order).eq('id', id), cl.from('order_items').select(COLS.item).eq('order_id', id), cl.from('sub_orders').select(COLS.sub).eq('order_id', id)]);
+      if (o.error || it.error || so.error) return;
+      if (!(o.data || []).length) { // gone from the view (deleted on another screen, 5.5 decision 10): drop it here too
+        const gone = orders.findIndex((x) => x.id === String(id));
+        if (gone >= 0) { orders.splice(gone, 1); names = vendorNames(orders); const app = window.OrdersApp; if (app && app.removeOrder) report(() => app.removeOrder(String(id))); notifySoon(); }
+        return;
+      }
+      const known = orders.some((x) => x.id === String(o.data[0].id));
+      if (!known && !(Date.parse(o.data[0].placed_at) >= windowStart().getTime())) return; // older than the screen's 12 months
+      await fill(cl, it.data || [], so.data || [], g);
+      if (!orders) return;
+      const cu = await customs(cl, id); if (cu) { if (cu.get(String(id))) custom.set(String(id), cu.get(String(id))); else custom.delete(String(id)); } else customOk = false;
+      if (!orders) return;
+      remember(o.data.slice(0, 1), it.data || []);
+      const next = toScreen(o.data.slice(0, 1), it.data || [], so.data || [], vendorRows, { links, states, leads, custom })[0];
+      const i = orders.findIndex((x) => x.id === next.id);
+      if (i >= 0) orders[i] = next; else orders.unshift(next);
+      names = vendorNames(orders);
+      const app = window.OrdersApp; if (app && app.applyOrder) report(() => app.applyOrder(next));
+      notifySoon();
+    } catch (e) { /* the next event or load brings it */ }
+  }
+  // one refetch per order at a time; events that arrive meanwhile ask for one more round
+  function refetch(id) {
+    const run = busy.get(id);
+    if (run) { run.again = true; return run.done; }
+    const st = { again: true };
+    st.done = (async () => { try { while (st.again) { st.again = false; await refresh(id); } } finally { if (busy.get(id) === st) busy.delete(id); } })();
+    busy.set(id, st);
+    return st.done;
+  }
+  function onChange(p) {
+    const row = p && p.new; if (!row) return undefined;
+    const id = p.table === 'orders' ? row.id : row.order_id;
+    if (id == null) return undefined;
+    const L = window.IBLive; // 0104: gathered, and held while a popup is open — the screen stays what the member is looking at
+    if (L && L.signal) { L.signal({ payload: { t: 'orders', ids: [id] } }); return undefined; }
+    return refetch(String(id));
+  }
+  // the channel's status: SUBSCRIBED again after CHANNEL_ERROR / TIMED_OUT / CLOSED (the socket was down; supabase-js rejoins
+  // by itself) → one load(), so the changes missed meanwhile are not lost. A channel unsubscribe() let go of is ignored.
+  const DOWN = ['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'];
+  function subscribe() {
+    const cl = c(); const cfg = window.IB_CONFIG || {};
+    if (channel || !cl || !uid() || cfg.realtime === false) return;
+    try {
+      let ch = cl.channel('orders'); let lost = false;
+      ['orders', 'order_items', 'sub_orders'].forEach((table) => ['INSERT', 'UPDATE'].forEach((event) => { ch = ch.on('postgres_changes', { event, schema: 'public', table }, onChange); }));
+      const mine = ch;
+      channel = ch.subscribe((status) => {
+        if (channel !== mine) return;
+        if (status === 'SUBSCRIBED') { if (lost) { lost = false; load(); } } else if (DOWN.includes(status)) lost = true;
+      });
+    } catch (e) { channel = null; /* no live updates; load() still works */ }
+  }
+  function unsubscribe() {
+    const ch = channel; channel = null;
+    if (ch && c()) { try { Promise.resolve(c().removeChannel(ch)).catch(() => {}); } catch (e) { /* already closed */ } }
+  }
+  // ---------- a maker's whole history (2026-11-15-comments.md decision 10 — «التقرير الكامل … من تاريخ ما بدأ معانا») ----------
+  // Every line of the maker, of any date (the screen holds the last 12 months only), with its order's status and day — read under
+  // RLS (orders.view), for the report only: nothing of it is kept but the products' photos / links.
+  // → { ok: true, rows: [{ oid, sid, prod, sku, tot, status, at }], capped } | { ok: false, reason }
+  const HISTORY_CAP = 5000;
+  async function makerHistory(vendorId) {
+    const cl = c();
+    if (!cl || !uid() || !vendorId) return { ok: false, reason: 'unavailable' };
+    const g = gen;
+    try {
+      const items = [];
+      for (let from = 0; from < HISTORY_CAP; from += PAGE) {
+        const { data: d, error } = await cl.from('order_items').select('id, order_id, sub_order_id, sku, name, total, removed, vendor_id, commission_rate, commission_fee').eq('vendor_id', vendorId).order('id', { ascending: false }).range(from, from + PAGE - 1);
+        if (error) throw error;
+        items.push(...(d || []));
+        if (!d || d.length < PAGE) break;
+      }
+      const live = items.filter((it) => !it.removed);
+      const oids = [...new Set(live.map((it) => it.order_id).filter((x) => x != null))]; const sids = [...new Set(live.map((it) => it.sub_order_id).filter((x) => x != null))];
+      const skus = [...new Set(live.map((it) => it.sku).filter((x) => x && !(x in images)))];
+      const [os, ss, ps] = await Promise.all([within(cl, 'orders_v', 'id, status, placed_at', 'id', oids, IDS, g), within(cl, 'sub_orders', 'id, woo_order_id', 'id', sids, IDS, g),
+        within(cl, 'products', 'sku, image_url, permalink, lang', 'sku', skus, SKUS, g).catch(() => [])]);
+      keepAll(ps);
+      const oBy = new Map(os.map((o) => [String(o.id), o])); const sBy = new Map(ss.map((x) => [String(x.id), x]));
+      const rows = live.map((it) => { const o = oBy.get(String(it.order_id)); if (!o) return null; const so = it.sub_order_id != null ? sBy.get(String(it.sub_order_id)) : null; const d = local(o.placed_at);
+        return { oid: String(it.order_id), sid: so && so.woo_order_id != null ? String(so.woo_order_id) : String(it.order_id), prod: it.name || '', sku: it.sku || '', tot: Number(it.total) || 0, status: o.status, at: d ? ymd(d) : '',
+          rate: numOrNull(it.commission_rate), fee: numOrNull(it.commission_fee), vendorId: it.vendor_id ? String(it.vendor_id) : null }; }).filter(Boolean); // rate / fee: the maker's share in the shared file (chat ش7)
+      rows.sort((a, b) => Number(b.oid) - Number(a.oid) || Number(a.sid) - Number(b.sid));
+      return { ok: true, rows, capped: items.length >= HISTORY_CAP };
+    } catch (e) { return { ok: false, reason: 'failed' }; }
+  }
+  // ---------- a report's photos (decision 10) ----------
+  // thumbs(urls) → Map url → data: URL. The site's own product photos as small images the page can put into a file it builds (a
+  // PDF / an Excel): the browser shows them but cannot read them (the site sends no CORS header), so woo-sync reads them — 12 a
+  // call, kept for the session. A photo that cannot be read is simply not in the map: the file goes out without it.
+  const thumbCache = new Map();
+  async function thumbs(urls) {
+    const cl = c(); const want = [...new Set((urls || []).filter((u) => typeof u === 'string' && HTTPS.test(u) && u.length <= 500))];
+    const out = new Map(); const ask = [];
+    want.forEach((u) => { if (!thumbCache.has(u)) ask.push(u); else if (thumbCache.get(u)) out.set(u, thumbCache.get(u)); });
+    if (!cl || !uid()) return out;
+    for (let i = 0; i < ask.length; i += 12) {
+      try {
+        const { data: body, error } = await cl.functions.invoke('woo-sync', { body: { action: 'thumbs', urls: ask.slice(i, i + 12) } });
+        if (error || !body || !Array.isArray(body.images)) continue; // not kept: asked again the next time
+        body.images.forEach((im) => {
+          if (!im || typeof im.url !== 'string') return;
+          const ok = /^image\/(png|jpeg|webp)$/.test(im.type || '') && typeof im.data === 'string' && /^[A-Za-z0-9+/=]+$/.test(im.data);
+          thumbCache.set(im.url, ok ? 'data:' + im.type + ';base64,' + im.data : '');
+          if (ok) out.set(im.url, thumbCache.get(im.url));
+        });
+      } catch (e) { /* the file goes out without these photos */ }
+    }
+    return out;
+  }
+  const imageOf = (sku) => (sku && images[sku]) || '';
+  function clear() { gen += 1; unsubscribe(); cancelNotify(); thumbCache.clear(); orders = null; custom = new Map(); customOk = false; seenO.clear(); seenI.clear(); vendorRows = []; leads = new Map(); leadAsked.clear(); images = {}; links = {}; states = new Map(); statuses = []; names = []; asked.clear(); busy.clear(); setState('idle'); }
+  window.IBOrders = { load, data, state: () => st, today, setOrderStatus, setConfirm, patchOrder, deleteOrder, deleteSub, deleteLine, setLineQty, addLine, makerProducts, siteStatuses, setSubSiteStatus, setItemStatus, setWaybill, setPulled, syncNow, registerWebhooks, subscribe, unsubscribe, clear, toScreen, refetch, makerHistory, thumbs, imageOf };
+  window.IBOrdersStore = window.IBOrders; // the name block 29's write hooks call
+})();

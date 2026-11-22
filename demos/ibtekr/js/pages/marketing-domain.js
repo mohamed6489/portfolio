@@ -1,0 +1,600 @@
+/* «التسويق» — the v5's campaign domain (IbtekrCampWiz, owner 1 Nov 20:21) + the rules of our schedule and publishing log
+   (phase 9.5, docs/superpowers/plans/2026-11-06-phase-9-5-marketing.md). Pure functions (UMD), no UI.
+   تفاصيل الكامبين → البناء → المراجعة → النشر (زي ما هو). الرصيد بالكريديت لكل موديل · التكلفة بتظهر قبل أي توليد · لازم كل
+   القطع تتوافق قبل النشر.
+   Ours (plan decisions 10–16): the prices are the real model credits (PRICE_DEMO false); the AI writing costs no Magnific credit
+   (TEXT_FILL 0 — it counts on the monthly AI budget); the video is «قريبًا» (decision 12 — its count stays 0, its code kept for
+   later); publishing is a download in 9.5.1 (no platform is connected for posting). */
+(function (root) {
+  'use strict';
+  const GOALS = Object.freeze(['منتج جديد', 'مجموعة جديدة', 'وعي بخدمة', 'عرض / خصم']);
+  const MEDIA = Object.freeze([['video', 'فيديو'], ['post', 'بوستات'], ['carousel', 'كاروسيل']]);
+  // decision 11: the real model credits (IBImages.MODELS) — no demo prices
+  const PRICE_DEMO = false;
+  // decision 12 (9.5.1): the video waited; 9.5.5 (decisions 57–66): it is open — through the Magnific bridge (the linked account pays)
+  const VIDEO_SOON = false;
+  // the video sizes (ratios) and the image size of a scene's key frame (the same ratio)
+  const VSIZES = Object.freeze([['9:16', '9:16 · ريلز وستوري'], ['1:1', '1:1 · مربع'], ['4:5', '4:5 · فيد'], ['16:9', '16:9 · عرضي']]);
+  const VIDEO_IMG_SIZE = Object.freeze({ '9:16': '1080x1920t', '1:1': '1080x1080', '4:5': '1080x1350', '16:9': '1600x900' });
+  const videoImgSize = (ratio) => VIDEO_IMG_SIZE[ratio] || VIDEO_IMG_SIZE['9:16'];
+  const videoMethod = (model, method) => (model === 'kling-2.5' ? 'separate' : method === 'chained' ? 'chained' : 'separate');
+  // كريديت لكل ثانية فيديو (للمرحلة الجاية)
+  const VIDEO_RATE = Object.freeze({ 'seedance-2.5': 5, 'seedance-2.0': 6, 'kling-2.5': 2, 'minimax-h3': 1 });
+  // decision 10: «املأ بالـ AI» / «إعادة كتابة بالـ AI» are Claude calls on the monthly AI budget (USD) — no Magnific credit
+  const TEXT_FILL = 0;
+  const METHODS = Object.freeze([['separate', 'مشاهد منفصلة'], ['chained', 'متصلة (بداية ونهاية)']]);
+  const METHOD_RATE = Object.freeze({ separate: 1, chained: 1.4 });
+  const MAX = Object.freeze({ count: 10, slides: 10, scenes: 8 });
+  const DEFAULT_MODEL = 'seedream-5-pro';
+
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(Number(v) || 0)));
+  const files = () => ({ use: [], ref: [] });
+
+  // ش38 (the owner 17 Nov — «لما ابدء كامبين خلي الكرياتيفس كلها عددها صفر»): a new campaign starts with no piece of any kind; «التالي» asks for one
+  function defaults() {
+    return {
+      goal: 'منتج جديد', idea: '', mediaTab: 'post',
+      media: {
+        video: Object.assign({ count: 0, size: '9:16', dur: 15, model: 'seedance-2.5', notes: '' }, files()),
+        post: Object.assign({ count: 0, size: '1080x1350', model: DEFAULT_MODEL, notes: '' }, files()),
+        carousel: Object.assign({ count: 0, slides: 4, size: '1080x1350', model: DEFAULT_MODEL, notes: '' }, files()),
+      },
+      extra: Object.assign({ count: 0, model: DEFAULT_MODEL, notes: '' }, files()),
+    };
+  }
+  const imgRate = (models, id) => ((models || []).find((m) => m.id === id) || (models || [])[0] || { credits: 2 }).credits;
+  const videoRate = (id) => VIDEO_RATE[id] || 5;
+
+  function blank(kind) { return { idea: '', caption: '', title: '', sub: '', badge: '', ref: [], use: [], img: null, gen: 0, approved: false, kind }; }
+  // القطع بتتبني من إعدادات الميديا؛ القطع اللي اتعملت قبل كده بتفضل زي ما هي لو العدد ما اتغيرش
+  function buildPieces(c, prev) {
+    const old = {}; (prev || []).forEach((p) => { old[p.id] = p; });
+    const out = []; const m = c.media;
+    const keep = (id, mk) => out.push(old[id] && old[id].kind === mk().kind ? old[id] : Object.assign(mk(), { id }));
+    const vids = VIDEO_SOON ? 0 : m.video.count;
+    for (let i = 1; i <= vids; i++) keep('V' + i, () => Object.assign(blank('فيديو'), { n: i, size: m.video.size, model: m.video.model, dur: m.video.dur, res: '1080p', sceneCount: 3, scenes: [], method: 'separate', music: { src: 'library', type: 'دافية هادية', file: '' }, voice: { mode: 'ai', voice: 'm-eg-1', text: '', file: '' }, clips: 0, assembled: false, video: null }));
+    for (let i = 1; i <= m.post.count; i++) keep('P' + i, () => Object.assign(blank('بوست'), { n: i, size: m.post.size, model: m.post.model }));
+    for (let i = 1; i <= m.carousel.count; i++) keep('C' + i, () => Object.assign(blank('كاروسيل'), { n: i, size: m.carousel.size, model: m.carousel.model, slides: Array.from({ length: m.carousel.slides }, (_, k) => Object.assign(blank('شريحة'), { n: k + 1 })) }));
+    for (let i = 1; i <= c.extra.count; i++) keep('X' + i, () => Object.assign(blank('ملف إضافي'), { n: i, size: '1080x1080', model: c.extra.model }));
+    out.forEach((p) => { if (p.kind === 'كاروسيل') { const want = m.carousel.slides; while (p.slides.length < want) p.slides.push(Object.assign(blank('شريحة'), { n: p.slides.length + 1 })); p.slides.length = want; } });
+    return out;
+  }
+  // مشاهد الفيديو: المدة بتتقسم بالتساوي (ثواني صحيحة) ومجموعها = مدة الفيديو
+  function splitScenes(dur, n, prev) {
+    n = clamp(n, 1, MAX.scenes); const base = Math.floor(dur / n); let rest = dur - base * n;
+    return Array.from({ length: n }, (_, i) => { const d = base + (rest-- > 0 ? 1 : 0); const o = (prev || [])[i] || {}; return { n: i + 1, d, idea: o.idea || '', text: o.text || '', ref: o.ref || [], use: o.use || [], img: o.img || null }; });
+  }
+  // comments decisions 33 and 65 (the owner 15 Nov — «احدد مدة المشهد الواحد» · «تعديل مدة المشهد الواحد لكل مشهد»): the seconds of
+  // one scene. The clip a model takes is the server's rule (_shared/mkt-video.js VIDEO_MODELS — a test compares the two): Kling
+  // 5 or 10 only, the others a range; a video is VIDEO_MAX seconds at most, whatever its scenes.
+  const CLIP = Object.freeze({ 'seedance-2.5': { min: 4, max: 30 }, 'seedance-2.0': { min: 4, max: 15 }, 'kling-2.5': { fixed: [5, 10] }, 'minimax-h3': { min: 5, max: 15 } });
+  const VIDEO_MAX = 30;
+  const clipRange = (model) => CLIP[model] || CLIP['seedance-2.5'];
+  function clipSeconds(d, model) {
+    const m = clipRange(model); const n = Math.max(1, Math.round(Number(d) || 0));
+    if (m.fixed) return m.fixed.reduce((best, x) => (Math.abs(x - n) < Math.abs(best - n) ? x : best), m.fixed[0]);
+    return Math.max(m.min, Math.min(m.max, n));
+  }
+  // the seconds one scene of n can take: the model's, cut so that n scenes stay within the video's length ([] = n scenes do not fit)
+  function sceneSeconds(model, n) {
+    const m = clipRange(model); const cnt = Math.max(1, Math.round(Number(n) || 1)); const cap = Math.floor(VIDEO_MAX / cnt);
+    if (m.fixed) return m.fixed.filter((x) => x <= cap);
+    const out = []; for (let x = m.min; x <= Math.min(m.max, cap); x++) out.push(x); return out;
+  }
+  // a piece's scenes wait for a new plan when the count was changed after they were planned («وزّع المشاهد تاني»)
+  const scenesPending = (p) => { const sc = p.scenes || []; return sc.length > 0 && sc.length !== clamp(p.sceneCount, 1, MAX.scenes); };
+  const planCount = (p) => { const sc = p.scenes || []; return sc.length && !scenesPending(p) ? sc.length : clamp(p.sceneCount, 1, MAX.scenes); };
+  const nearest = (opts, want) => opts.reduce((best, x) => (Math.abs(x - want) < Math.abs(best - want) ? x : best), opts[0]);
+  // «مدة المشهد الواحد» of a piece as it stands: its scenes' own seconds when they agree, else what the member chose, else the even
+  // share — for the count the next plan will have when the scenes wait for one
+  function sceneDurOf(p) {
+    const sc = p.scenes || []; const n = planCount(p);
+    if (sc.length && !scenesPending(p) && sc.every((x) => Number(x.d) === Number(sc[0].d))) return clipSeconds(sc[0].d, p.model);
+    const opts = sceneSeconds(p.model, n); const want = clipSeconds(p.sceneDur || Math.round((Number(p.dur) || 0) / n), p.model);
+    return opts.length ? nearest(opts, want) : want;
+  }
+  // the video's length as it stands: the scenes' sum, or count × seconds while there is no plan for that count yet
+  function videoSeconds(p) {
+    const sc = p.scenes || [];
+    return sc.length && !scenesPending(p) ? sc.reduce((x, y) => x + (Number(y.d) || 0), 0) : sceneDurOf(p) * planCount(p);
+  }
+  // every scene the same seconds: the video's length follows (count × seconds). → '' | the reason it was refused
+  function setSceneDur(p, d) {
+    const n = planCount(p); const opts = sceneSeconds(p.model, n);
+    const v = clipSeconds(d, p.model);
+    if (!opts.includes(v)) return opts.length ? 'مدة المشهد مع ' + n + ' مشاهد من ' + opts[0] + ' لـ ' + opts[opts.length - 1] + ' ثانية — الفيديو كله لحد ' + VIDEO_MAX + ' ثانية' : n + ' مشاهد أكتر من اللي الموديل ده يشيله في ' + VIDEO_MAX + ' ثانية — قلّل عدد المشاهد';
+    p.sceneDur = v; p.dur = v * n; if (!scenesPending(p)) (p.scenes || []).forEach((x) => { x.d = v; delete x.dh; });
+    return '';
+  }
+  // one scene's own seconds (the member's — kept when the scenes are planned again): the video's length is the scenes' sum
+  function setSceneD(p, k, d) {
+    const sc = p.scenes || []; const s = sc[k]; if (!s) return 'المشهد مش موجود';
+    const v = clipSeconds(d, p.model); const total = sc.reduce((x, y, i) => x + (i === k ? v : Number(y.d) || 0), 0);
+    if (total > VIDEO_MAX) return 'الفيديو كله لحد ' + VIDEO_MAX + ' ثانية — قلّل مشهد تاني الأول';
+    s.d = v; s.dh = true;
+    if (!scenesPending(p)) { p.dur = total; p.sceneDur = sc.every((x) => Number(x.d) === v) ? v : null; }
+    return '';
+  }
+  // the scenes count changed: back on the planned scenes' own count the video is their sum again; else the next plan's length
+  // follows the chosen «مدة المشهد الواحد» (cut to what the count allows) or keeps the even share of the video's length
+  function setSceneCount(p, n) {
+    const sc = p.scenes || []; const was = sceneDurOf(p);
+    p.sceneCount = clamp(n, 1, MAX.scenes);
+    if (sc.length && !scenesPending(p)) { p.dur = sc.reduce((x, y) => x + (Number(y.d) || 0), 0); p.sceneDur = sc.every((x) => Number(x.d) === Number(sc[0].d)) ? Number(sc[0].d) : null; return p; }
+    const opts = sceneSeconds(p.model, p.sceneCount);
+    if (opts.length) { const v = nearest(opts, p.sceneDur || was); p.sceneDur = v; p.dur = v * p.sceneCount; }
+    return p;
+  }
+  // the scenes the server planned (even seconds), with the seconds the member set by hand kept where the count did not change
+  function keepSceneDurs(next, old) {
+    const o = Array.isArray(old) ? old : []; if (o.length !== next.length) return next;
+    return next.map((s, k) => (o[k] && o[k].dh ? Object.assign({}, s, { d: o[k].d, dh: true }) : s));
+  }
+  // التكلفة قبل التوليد (كريدت الصور؛ الكتابة بالـ AI = 0 كريدت — قرار 10)
+  function cost(action, p, models) {
+    if (action === 'fill') return TEXT_FILL;
+    if (action === 'image') return imgRate(models, p.model);
+    if (action === 'carousel') return imgRate(models, p.model) * (1 + p.slides.length);
+    if (action === 'scene') return imgRate(models, DEFAULT_MODEL);
+    if (action === 'scenes-img') return imgRate(models, DEFAULT_MODEL) * p.scenes.length;
+    if (action === 'clips') return Math.round(videoRate(p.model) * (p.dur || 0) * (METHOD_RATE[p.method] || 1));
+    if (action === 'voice') return 2;
+    return 0;
+  }
+  // الرصيد: بيتخصم بس لو كفاية (عرض بس — السيرفر هو اللي بيوقف عند السقف)
+  function spend(wallet, n) { if (wallet.cap != null && n > wallet.balance) return false; wallet.balance -= n; wallet.spent += n; return true; }
+
+  // جاهزة للمراجعة = اتولّدت
+  function built(p) {
+    if (p.kind === 'فيديو') return p.scenes.length > 0 && p.scenes.every((s) => !!s.img);
+    if (p.kind === 'كاروسيل') return !!p.img && p.slides.every((s) => !!s.img);
+    return !!p.img;
+  }
+  function approvable(p) { if (p.kind === 'فيديو') return !!p.assembled; return built(p); }
+  function approved(p) { if (p.kind === 'كاروسيل') return !!p.approved && p.slides.every((s) => s.approved); return !!p.approved; }
+  function approveAll(list) { let n = 0; list.forEach((p) => { if (!approvable(p) || approved(p)) return; p.approved = true; if (p.slides) p.slides.forEach((s) => { s.approved = true; }); n++; }); return n; }
+  const progress = (list, fn) => ({ done: list.filter(fn).length, total: list.length });
+  const canBuildNext = (list) => list.length > 0 && list.every(built);
+  const canReviewNext = (list) => list.length > 0 && list.every(approved);
+  function validateDetails(c) {
+    const e = {};
+    if (!String(c.idea || '').trim()) e.idea = 'اكتب الفكرة العامة';
+    if (!c.goal) e.goal = 'اختار الهدف';
+    const n = (VIDEO_SOON ? 0 : c.media.video.count) + c.media.post.count + c.media.carousel.count + c.extra.count;
+    if (!n) e.media = 'اختار قطعة واحدة على الأقل';
+    return e;
+  }
+  // تقدير تكلفة الكامبين كلها (بيظهر في التفاصيل)
+  function estimate(c, models) {
+    const m = c.media; const img = (id) => imgRate(models, id);
+    const vids = VIDEO_SOON ? 0 : m.video.count;
+    return m.post.count * img(m.post.model) + m.carousel.count * (1 + m.carousel.slides) * img(m.carousel.model) + vids * 3 * img(DEFAULT_MODEL) + c.extra.count * img(c.extra.model);
+  }
+  // 9.5.5: the video seconds are on the linked Magnific account (decision 57) — an estimate shown beside, never from the image wallet
+  const estimateVideo = (c) => (VIDEO_SOON ? 0 : c.media.video.count) * videoRate(c.media.video.model) * c.media.video.dur;
+
+  // ---------------------------------------------------------------- ours: the campaign's status («آخر الشغل», decision 18)
+
+  // [label, tone] from the saved row and its posts: مسودة (step 1) · بتتبني (2) · مستنية المراجعة (3) · جاهزة للنشر (4 before the
+  // schedule) · اتجدولت (scheduled, something still waiting) · اتنشرت (scheduled and nothing waiting, one published at least)
+  function campaignStatus(row, posts) {
+    const r = row || {}; const step = clamp(r.step, 1, 4);
+    if (r.scheduledAt) {
+      const L = (posts || []).filter((x) => x.campaignId === r.id);
+      const waiting = L.some((x) => x.status === 'مجدول' || x.status === 'فشل');
+      if (!waiting && L.some((x) => x.status === 'اتنشر')) return ['اتنشرت', 'brand'];
+      return ['اتجدولت', 'success'];
+    }
+    return step === 4 ? ['جاهزة للنشر', 'gold'] : step === 3 ? ['مستنية المراجعة', 'orange'] : step === 2 ? ['بتتبني', 'info'] : ['مسودة', 'neutral'];
+  }
+  // the campaign's name: the idea's first line (≤ 120)
+  const campaignName = (idea) => { const s = String(idea || '').split(/\r?\n/)[0].replace(/\s+/g, ' ').trim(); return (s.length > 120 ? s.slice(0, 120).replace(/\s+\S*$/, '') : s) || 'كامبين من غير اسم'; };
+
+  // ---------------------------------------------------------------- ours: the schedule (step 4) and the publishing log
+
+  const PLATFORMS = Object.freeze(['انستجرام', 'فيسبوك', 'تيك توك']);
+  // decision 14: nothing connected by default (9.5.1); from 9.5.2 the live connection (mkt-publish status) decides — publishable / notReady
+  const CONNECTED = Object.freeze({ 'انستجرام': false, 'فيسبوك': false, 'تيك توك': false });
+  const POST_STATUSES = Object.freeze(['مجدول', 'اتنشر', 'فشل', 'اتحذف']);
+  const CAP_MAX = 2200; // أقل حد بين المنصات (انستجرام)
+  const TAGS = '#إبتكر #هاندميد #ديكور_بوهيمي';
+  const TIMES = Object.freeze(Array.from({ length: 16 }, (_, i) => String(8 + i).padStart(2, '0') + ':00'));
+  const timeOpts = (cur) => (TIMES.includes(cur) || !cur ? TIMES.slice() : TIMES.concat(cur).sort());
+  // the log's kind of a piece
+  const postKind = (p) => (p.kind === 'كاروسيل' ? 'كاروسيل' : p.kind === 'فيديو' ? 'ريل' : p.kind === 'ملف إضافي' ? 'ستوري' : 'بوست');
+  // a piece's images in order (the post's one, the carousel's cover then its slides)
+  function pieceImages(p) {
+    if (!p) return [];
+    if (p.kind === 'كاروسيل') return [p.img].concat((p.slides || []).map((s) => s.img)).filter(Boolean);
+    if (p.kind === 'فيديو') return (p.scenes || []).map((s) => s.img).filter(Boolean);
+    return p.img ? [p.img] : [];
+  }
+  // what a piece sends to the log / the platform (9.5.5, decision 63): a video piece = its assembled MP4 first, then its key frames (the
+  // log's thumbnail); a video not assembled yet sends its frames only (a download); the others their images
+  const isVideoPath = (p) => /\.mp4$/i.test(String(p || ''));
+  function pubImages(p) {
+    if (p && p.kind === 'فيديو') return (p.video ? [p.video] : []).concat(pieceImages(p));
+    return pieceImages(p);
+  }
+  // the hook a log row shows (the v5's syncPub)
+  const hookOf = (p) => String(p.title || p.idea || p.kind + ' ' + p.n).replace(/\s+/g, ' ').trim().slice(0, 200);
+  // days in ISO (UTC arithmetic on dates only)
+  const addD = (iso, n) => new Date(Date.parse(iso + 'T00:00:00Z') + n * 864e5).toISOString().slice(0, 10);
+  // the suggested time of the i-th piece (the v5: every other day from tomorrow, at the evening's busy hours)
+  const suggest = (i, today) => ({ date: addD(today, 1 + 2 * (i % 6)), time: ['19:00', '21:00', '20:00'][i % 3] });
+  // step 4 → mkt_schedule's items: a row per piece × platform it goes to; `how` (9.5.2) = publish where the piece's «انشر» is on and
+  // that platform can take it now (publishable), else a download
+  function scheduleItems(pieces, sched, fallbackCaption, conn) {
+    const out = [];
+    (pieces || []).forEach((p) => {
+      const s = (sched || {})[p.id]; if (!s || !Array.isArray(s.pl)) return;
+      const caption = String(p.caption || fallbackCaption || '').slice(0, CAP_MAX);
+      const kind = postKind(p), images = pubImages(p), tags = String(p.tags || TAGS).slice(0, 300);
+      const wants = Array.isArray(s.how) && s.how.includes('انشر');
+      s.pl.filter((x) => PLATFORMS.includes(x)).forEach((platform) => out.push({ piece: p.id, kind, name: hookOf(p), caption, tags, images, platform, day: s.date, time: s.time,
+        how: wants && publishable(kind, images, platform, conn, { caption, tags }).ok ? 'publish' : 'download' }));
+    });
+    return out;
+  }
+
+  // ---------------------------------------------------------------- ours: publishing (9.5.2, decisions 30–38)
+
+  // the platforms the system publishes to (TikTok: a download — no API for it yet) and the kinds it publishes (ريل from 9.5.5: its MP4)
+  const PUBLISHABLE = Object.freeze(['انستجرام', 'فيسبوك']);
+  const PUB_KINDS = Object.freeze(['بوست', 'كاروسيل', 'ستوري', 'ريل']);
+  const MAX_IMAGES = 10; // a carousel on both platforms
+  const PL_KEY = Object.freeze({ 'فيسبوك': 'facebook', 'انستجرام': 'instagram' });
+  // the published text: the caption, a blank line, the tags
+  const pubText = (caption, tags) => [String(caption || '').trim(), String(tags || '').trim()].filter(Boolean).join('\n\n');
+  const chars = (s) => Array.from(String(s || '')).length;
+  // the connection (mkt-publish status): { autopublish, facebook: { linked, publish }, instagram: { linked, publish } } → why a platform
+  // can't publish now (null = it can)
+  function notReady(conn, pl) {
+    const c = conn && PL_KEY[pl] ? conn[PL_KEY[pl]] : null;
+    if (!conn) return 'حالة الربط لسه بتتحمّل';
+    if (!c || !c.linked) return pl === 'انستجرام' ? 'مفيش حساب انستجرام مربوط بالصفحة' : 'الصفحة مش مربوطة';
+    if (!c.publish) return 'الربط محتاج صلاحية النشر — الأدمن يربط الصفحة تاني';
+    if (!conn.autopublish) return 'النشر التلقائي متوقف — الأدمن يشغّله من كارت الربط';
+    return null;
+  }
+  // a piece × platform can be published by the system now: the platform, the kind, the images, Instagram's text, the connection
+  function publishable(kind, images, pl, conn, text) {
+    if (!PUBLISHABLE.includes(pl)) return { ok: false, why: pl === 'تيك توك' ? 'تيك توك مش مربوط — داونلود بس' : 'المنصة دي داونلود بس' };
+    if (!PUB_KINDS.includes(kind)) return { ok: false, why: 'النوع ده داونلود بس' };
+    const n = (images || []).length;
+    if (kind === 'ريل') {
+      if (!n || !isVideoPath(images[0])) return { ok: false, why: 'الفيديو لسه ما اتجمّعش — جمّعه في المراجعة الأول' };
+      if (pl === 'انستجرام' && text && chars(pubText(text.caption, text.tags)) > CAP_MAX) return { ok: false, why: 'الكابشن والهاشتاجات أطول من ' + CAP_MAX + ' حرف (حد انستجرام)' };
+      const whyV = notReady(conn, pl);
+      return whyV ? { ok: false, why: whyV } : { ok: true };
+    }
+    if (!n) return { ok: false, why: 'مفيش صورة' };
+    if (kind === 'كاروسيل' && n < 2) return { ok: false, why: 'الكاروسيل محتاج صورتين على الأقل' };
+    if (kind !== 'كاروسيل' && n > 1) return { ok: false, why: 'البوست والستوري صورة واحدة' };
+    if (n > MAX_IMAGES) return { ok: false, why: 'أقصى عدد ' + MAX_IMAGES + ' صور في الكاروسيل' };
+    if (pl === 'انستجرام' && text && kind !== 'ستوري' && chars(pubText(text.caption, text.tags)) > CAP_MAX) return { ok: false, why: 'الكابشن والهاشتاجات أطول من ' + CAP_MAX + ' حرف (حد انستجرام)' };
+    const why = notReady(conn, pl);
+    return why ? { ok: false, why } : { ok: true };
+  }
+  // Instagram's feed ratio (4:5 … 1.91:1): ok as it is, ok with white margins up to 10% to the nearest bound, or refused; a story any ratio.
+  // → { ok, pad: { w, h } | null, why }
+  const IG_MIN = 0.8, IG_MAX = 1.91, PAD_MAX = 0.10;
+  function igFit(w, h, kind) {
+    w = Math.round(Number(w)); h = Math.round(Number(h));
+    if (!(w > 0) || !(h > 0)) return { ok: false, pad: null, why: 'الصورة مااتقريتش' };
+    if (kind === 'ستوري') return { ok: true, pad: null };
+    const r = w / h;
+    if (r >= IG_MIN && r <= IG_MAX) return { ok: true, pad: null };
+    if (r < IG_MIN && IG_MIN / r - 1 <= PAD_MAX) return { ok: true, pad: { w: Math.ceil(h * IG_MIN), h } };
+    if (r > IG_MAX && r / IG_MAX - 1 <= PAD_MAX) return { ok: true, pad: { w, h: Math.ceil(w / IG_MAX) } };
+    return { ok: false, pad: null, why: 'انستجرام بياخد البوست من 4:5 لـ 1.91:1 — المقاس ده للستوري أو فيسبوك' };
+  }
+  // the JPEG copy's size (decision 33): the canvas (with the margins) scaled so its long side ≤ 2160
+  function jpegSize(w, h, pad) {
+    const W = pad ? pad.w : w, H = pad ? pad.h : h; const k = Math.min(1, 2160 / Math.max(W, H));
+    return { w: Math.max(1, Math.round(W * k)), h: Math.max(1, Math.round(H * k)), k };
+  }
+  const isJpeg = (path) => /\.jpe?g$/i.test(String(path || ''));
+  // a failed post's reason (the server's code) in words
+  const PUB_ERRORS = Object.freeze({
+    off: 'النشر التلقائي متوقف', not_linked: 'الصفحة مش مربوطة', no_instagram: 'مفيش حساب انستجرام مربوط بالصفحة',
+    permission: 'الربط محتاج صلاحية النشر — الأدمن يربط الصفحة تاني', token: 'ربط الصفحة انتهى — الأدمن يربطها تاني',
+    image: 'المنصة رفضت الصورة (المقاس أو النوع)', rate: 'وصلنا لحد النشر على المنصة — جرّب بعد شوية',
+    container: 'انستجرام ماقدرش يجهّز البوست', uncertain: 'مش متأكدين إنه اتنشر — بص على الصفحة، ولو مش موجود دوس «انشر دلوقتي»',
+    timeout: 'ميتا ماردتش — جرّب تاني', text: 'الكلام أطول من المسموح على المنصة', kind: 'النوع ده مابيتنشرش من السيستم',
+    gone: 'البوست مش موجود على المنصة', busy: 'البوست بيتنشر دلوقتي', images: 'صور البوست مش جاهزة للنشر',
+  });
+  const pubError = (code) => PUB_ERRORS[code] || (/^graph_\d/.test(String(code || '')) ? 'ميتا رفضت (كود ' + String(code).slice(6) + ')' : 'النشر فشل');
+  // the numbers (decision 36): a post counts when it was published (or deleted after it was); the engagement = likes + comments + shares + saves
+  const seenSt = (x) => !!x && (x.status === 'اتنشر' || (x.status === 'اتحذف' && !!x.wasLive));
+  const engOf = (x) => (x && x.eng != null ? Number(x.eng) || 0 : ['likes', 'comments', 'shares', 'saves'].reduce((s, k) => s + (Number(x && x[k]) || 0), 0));
+  function postTotals(list) {
+    const seen = (list || []).filter(seenSt);
+    return { posts: seen.length, views: seen.reduce((s, x) => s + (Number(x.views) || 0), 0), eng: seen.reduce((s, x) => s + engOf(x), 0) };
+  }
+  const SRC_LABEL = Object.freeze({ system: 'من السيستم', platform: 'من المنصة مباشرة' });
+  const isPast = (day, time, today, now) => day < today || (day === today && time <= now);
+  const canMove = (x) => x.status === 'مجدول' || x.status === 'فشل';
+  // the v5's moveCheck: a day, not a past day or hour (Cairo's today / now), not the same time
+  function moveCheck(x, day, time, today, now) {
+    if (!day) return { day: 'اختار اليوم' };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return { day: 'اختار اليوم' };
+    if (!/^\d{2}:\d{2}$/.test(String(time || ''))) return { time: 'اختار الساعة' };
+    if (day < today) return { day: 'اليوم ده فات — اختار النهارده أو بعده' };
+    if (isPast(day, time, today, now)) return { time: 'الساعة دي فاتت النهارده — اختار ساعة بعد ' + now };
+    if (x && day === x.day && time === x.time) return { day: 'ده نفس الميعاد الحالي' };
+    return null;
+  }
+  // the ZIP's plan (decision 14): a folder per piece — its images numbered in order and caption.txt (the caption + the tags)
+  // ---------- «إعلانات المنافسين» (comments decision 70): Meta's Ad Library, opened on a competitor's ads ----------
+  // The library's own page shows any advertiser's running ads; its API gives commercial ads only where they reached the EU / UK,
+  // so nothing is pulled — the link opens the library on the page's list (its number known) or on a search (a word, else the name).
+  const AD_LIBRARY = 'https://www.facebook.com/ads/library/';
+  const PAGE_HOST = /^https:\/\/([a-z0-9-]+\.)?(facebook|instagram)\.com\/[^\s<>"]{1,300}$/i;
+  // ش44: media = 'video' | 'image' narrows the library to the ads of that kind (its own media_type filter); anything else = all
+  function adLibraryUrl(c, country, media) {
+    const q = new URLSearchParams({ active_status: 'active', ad_type: 'all', country: /^[A-Z]{2}$/.test(String(country || '')) ? country : 'EG', media_type: media === 'video' || media === 'image' ? media : 'all' });
+    const id = String((c && c.pageId) || '').trim();
+    if (/^[0-9]{5,20}$/.test(id)) q.set('view_all_page_id', id);
+    else { q.set('q', String((c && (c.keyword || c.name)) || '').replace(/\s+/g, ' ').trim().slice(0, 80)); q.set('search_type', 'keyword_unordered'); }
+    return AD_LIBRARY + '?' + q.toString();
+  }
+  // what the member typed for the page: its number, or its link (a profile.php?id= / …/pages/name/number link gives the number too)
+  function competitorPage(v) {
+    const t = String(v == null ? '' : v).trim();
+    if (!t) return { pageId: '', pageUrl: '' };
+    if (/^[0-9]{5,20}$/.test(t)) return { pageId: t, pageUrl: '' };
+    const u = /^https?:\/\//i.test(t) ? t.replace(/^http:/i, 'https:') : 'https://' + t.replace(/^\/+/, '');
+    if (!PAGE_HOST.test(u)) return { error: 'page' };
+    let id = '';
+    try { const x = new URL(u); const q = x.searchParams.get('id') || ''; const m = /\/(?:pages\/[^/]+|people\/[^/]+)\/([0-9]{5,20})\/?$/.exec(x.pathname); id = /^[0-9]{5,20}$/.test(q) ? q : m ? m[1] : ''; } catch (e) { return { error: 'page' }; }
+    return { pageId: id, pageUrl: u };
+  }
+  // the form's values → the row's columns, or the first field that is wrong
+  function competitorRow(f) {
+    const one = (v, max) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max + 1);
+    const name = one(f && f.name, 80), keyword = one(f && f.keyword, 80), note = one(f && f.note, 300);
+    if (!name || name.length > 80) return { error: 'name' };
+    if (keyword.length > 80) return { error: 'keyword' };
+    if (note.length > 300) return { error: 'note' };
+    if (/[<>]/.test(name + keyword + note)) return { error: 'text' };
+    const pg = competitorPage(f && f.page); if (pg.error) return { error: 'page' };
+    return { row: { name, page_id: pg.pageId || null, page_url: pg.pageUrl || null, keyword: keyword || null, note: note || null } };
+  }
+
+  const safeName = (s) => String(s || '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 60) || 'قطعة';
+  function zipPlan(items) {
+    const used = new Set();
+    return (items || []).map((it) => {
+      let dir = safeName(it.label); let k = 2; while (used.has(dir)) dir = safeName(it.label) + ' (' + k++ + ')'; used.add(dir);
+      const files = (it.images || []).map((path, i) => ({ path, name: dir + '/' + String(i + 1).padStart(2, '0') + '.' + ((/\.([a-z0-9]{3,4})$/i.exec(path) || [, 'jpg'])[1].toLowerCase()) }));
+      const text = [it.caption || '', it.tags || ''].filter(Boolean).join('\n\n');
+      return { dir, files, caption: { name: dir + '/caption.txt', data: text } };
+    });
+  }
+
+  // ---------------------------------------------------------------- ours: the calendar (the plan, decision 16)
+
+  // the week starts on the settings' day (2026-11-14-settings-lists.md decision 4 — IBSettings.weekStart(): السبت 6 · الأحد 0 · الاتنين 1;
+  // Saturday when the settings aren't loaded): DAYS are the names in the week's order and dayIdx(d) is d's place in it
+  const SAT_DAYS = Object.freeze(['السبت', 'الأحد', 'الاتنين', 'التلات', 'الأربع', 'الخميس', 'الجمعة']);
+  const wsDow = () => { try { const S = typeof globalThis !== 'undefined' ? globalThis.IBSettings : null; const v = S && S.weekStart ? Number(S.weekStart()) : 6; return v === 0 || v === 1 || v === 6 ? v : 6; } catch (e) { return 6; } };
+  const days = () => { const k = (wsDow() + 1) % 7; return Object.freeze(SAT_DAYS.slice(k).concat(SAT_DAYS.slice(0, k))); };
+  const dayIdx = (iso) => (new Date(iso + 'T00:00:00Z').getUTCDay() - wsDow() + 7) % 7; // the week's first day = 0
+  const wkStart = (iso) => addD(iso, -dayIdx(iso));
+  function weeksOf(from, to) { const out = []; if (!from || !to || from > to) return out; for (let w = wkStart(from); w <= to; w = addD(w, 7)) out.push(w); return out; }
+  // the plan's default period (the v5's planDefault): from last week's first day, three weeks
+  function planDefault(today) { const sat = wkStart(today); return { from: addD(sat, -7), to: addD(sat, 13), preset: 'custom' }; }
+  const D2 = (d) => String(d || '').split('-').reverse().join('/');
+  const dayLabel = (d) => SAT_DAYS[(new Date(d + 'T00:00:00Z').getUTCDay() + 1) % 7] + ' ' + D2(d);
+  function relDay(d, today) { const n = Math.round((Date.parse(d + 'T00:00:00Z') - Date.parse(today + 'T00:00:00Z')) / 864e5); return n < 0 ? 'فات ميعاده' : n === 0 ? 'النهارده' : n === 1 ? 'بكرة' : n === 2 ? 'بعد يومين' : n <= 10 ? 'بعد ' + n + ' أيام' : 'بعد ' + n + ' يوم'; }
+  const pct = (a, b) => (b ? (Math.round(a / b * 1000) / 10) + '%' : '—');
+
+  // ---------------------------------------------------------------- ours: a pasted link (decision 13)
+
+  // a product link of the site or a SKU → the keys to look it up in the products mirror: the permalink as typed and decoded,
+  // with and without its trailing slash (no query or hash), or the SKU in capitals; anything else = null («ارفع الصورة»)
+  function linkKeys(text) {
+    const s = String(text || '').trim(); if (!s) return null;
+    if (/^[A-Za-z0-9][A-Za-z0-9_-]{2,39}$/.test(s)) return { sku: s.toUpperCase() };
+    let u; try { u = new URL(s); } catch (e) { return null; }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    const base = u.origin + u.pathname; let dec = base; try { dec = decodeURI(base); } catch (e) { /* keep */ }
+    let enc = base; try { enc = encodeURI(dec); } catch (e) { /* keep */ }
+    const both = (x) => (x.endsWith('/') ? [x, x.slice(0, -1)] : [x, x + '/']);
+    // the owner 15 Nov («بدلو لينك المنتج علي الموقع … مش قريه»): the mirror's permalinks are the staging site's, so a link of the live
+    // site (ibtekr.club) — or any host — is also matched by its product path (/product/<slug>), the host aside; a bare path never
+    const segs = u.pathname.split('/').filter(Boolean);
+    const paths = segs.length >= 2 && segs[0].toLowerCase() === 'product' ? [...new Set([u.pathname, (() => { try { return decodeURI(u.pathname); } catch (e) { return u.pathname; } })()].map((x) => x.replace(/\/+$/, '')))] : [];
+    return { permalinks: [...new Set([].concat(both(base), both(dec), both(enc)))], paths };
+  }
+
+  // ---------------------------------------------------------------- 9.5.3: the ads numbers (decisions 44–46) — Meta's own numbers
+  // (mkt_ad_stats) next to WooCommerce's orders from the same campaign (mkt_ads_orders, by utm_campaign = Meta's campaign id)
+
+  const ADS_RULES = Object.freeze({ stopSpend: 1500, stopDays: 5, maxCpa: 450, scaleMer: 4, scaleOrders: 5, trackRatio: 2, trackMin: 5, tiredFreq: 4 });
+  const AD_PLATFORM = Object.freeze({ meta: 'ميتا', google: 'جوجل', tiktok: 'تيك توك' });
+  // 9.5.6 (decision 67): the fields the admin writes for a platform's link — the same keys as the server's LINK_FIELDS (a test compares them);
+  // a secret never comes back (the server shows its last four), an id drops dashes / «act_», `optional` = not needed to read, `oauth` = the sign-in needs it
+  const AD_LINK_FIELDS = Object.freeze({
+    meta: [{ key: 'access_token', label: 'مفتاح القراية (System User token)', secret: true, help: 'من Business Portfolio › System Users — صلاحية ads_read (وads_management لو عايز الميديا باير ينفّذ)' }, { key: 'account_id', label: 'رقم حساب الإعلانات', placeholder: 'act_1234567890', help: 'من مدير الإعلانات — بالـ act_ أو الأرقام بس' }],
+    tiktok: [{ key: 'app_id', label: 'App ID', oauth: true, help: 'تطبيق TikTok for Business (business-api.tiktok.com › My Apps)' }, { key: 'secret', label: 'App Secret', secret: true, oauth: true },
+      { key: 'access_token', label: 'Access Token (اختياري — بدل زرار الربط)', secret: true, optional: true, help: 'لو معاك توكن جاهز من بوابة التطبيق' }, { key: 'advertiser_id', label: 'Advertiser ID (اختياري — بيتحدد مع الربط)', optional: true }],
+    google: [{ key: 'developer_token', label: 'Developer token', secret: true, oauth: true, help: 'من Google Ads › الأدوات › API Center (حساب المدير MCC)' }, { key: 'client_id', label: 'OAuth Client ID', oauth: true, help: 'من Google Cloud › Credentials (Web application) — سجّل فيه رابط الرجوع اللي تحت' },
+      { key: 'client_secret', label: 'OAuth Client secret', secret: true, oauth: true }, { key: 'login_customer_id', label: 'Login customer ID (MCC — اختياري)', optional: true, placeholder: '123-456-7890' },
+      { key: 'refresh_token', label: 'Refresh token (اختياري — بدل زرار الربط)', secret: true, optional: true }, { key: 'customer_id', label: 'Customer ID (اختياري — بيتحدد مع الربط)', optional: true, placeholder: '123-456-7890' },
+      { key: 'version', label: 'إصدار Google Ads API (اختياري)', optional: true, placeholder: 'v21' }],
+  });
+  const AD_OAUTH = Object.freeze({ tiktok: 'اربط بحساب تيك توك', google: 'اربط بحساب جوجل' });
+  // the admin's inputs → the fields to send: a secret input left empty keeps the stored one (left out); a plain field not touched keeps its
+  // stored value (sent back as it is), one emptied by hand is sent as '' (removed)
+  function linkFieldsBody(platform, values, stored) {
+    const out = {}; const st = stored || {}; const vals = values || {};
+    for (const f of AD_LINK_FIELDS[platform] || []) {
+      const typed = typeof vals[f.key] === 'string'; const v = typed ? vals[f.key].trim() : '';
+      if (v) out[f.key] = v;
+      else if (f.secret) { if (!st[f.key]) out[f.key] = ''; } // a stored secret stays unless typed over
+      else out[f.key] = !typed && st[f.key] ? String(st[f.key]) : '';
+    }
+    return out;
+  }
+  const SOLD = Object.freeze(['completed', 'in_progress', 'pending']); // an ad order counts as a sale unless cancelled / returned / failed
+  const nz = (v) => Number(v) || 0;
+  const ratio = (a, b) => (b > 0 ? a / b : null);
+  const inRg = (d, rg) => !rg || (d >= rg.from && d <= rg.to);
+  // the ad orders (mkt_ads_orders rows) of a period → per platform and per campaign: orders / sales / share (sales only) + cancelled;
+  // share stays null when the caller has no accounts.view (the server sends null)
+  function adOrders(rows, rg) {
+    const out = { platforms: {}, campaigns: {}, shareKnown: false };
+    for (const r of Array.isArray(rows) ? rows : []) {
+      if (!r || !inRg(r.day, rg)) continue;
+      const pl = r.platform || 'meta'; const sold = SOLD.includes(r.grp);
+      if (r.share != null) out.shareKnown = true;
+      for (const [map, key] of [[out.platforms, pl], [out.campaigns, pl + '|' + (r.campaign || '')]]) {
+        const a = map[key] || (map[key] = { orders: 0, sales: 0, share: 0, cancelled: 0, sources: {} });
+        if (sold) { a.orders += nz(r.orders); a.sales += nz(r.sales); a.share += nz(r.share); a.sources[r.source || ''] = (a.sources[r.source || ''] || 0) + nz(r.orders); } else a.cancelled += nz(r.orders);
+      }
+    }
+    return out;
+  }
+  const dayStats = (stats, level, rg) => (Array.isArray(stats) ? stats : []).filter((s) => s && s.level === level && inRg(s.day, rg));
+  // the campaigns of a period: Meta's numbers + the Woo orders of the same campaign id; a campaign with orders but no spend in the
+  // period is listed too (its ads ran before); sorted by spend
+  function adCampaignRows(objects, stats, orderRows, rg) {
+    const names = {}; for (const o of Array.isArray(objects) ? objects : []) if (o && o.kind === 'campaign') names[o.id] = o;
+    const byId = {};
+    const plOf = (k) => AD_PLATFORM[k] || AD_PLATFORM.meta;
+    const row = (id, pl) => byId[id] || (byId[id] = { id, name: (names[id] && names[id].name) || '#' + id, status: (names[id] && names[id].status) || null, platform: plOf((names[id] && names[id].platform) || pl), key: (names[id] && names[id].platform) || pl || 'meta',
+      spend: 0, impressions: 0, clicks: 0, purchases: 0, value: 0, orders: 0, sales: 0, share: 0, cancelled: 0, sources: {}, days: {} });
+    for (const s of dayStats(stats, 'campaign', rg)) {
+      const r = row(s.object_id, s.platform); r.spend += nz(s.spend); r.impressions += nz(s.impressions); r.clicks += nz(s.link_clicks != null ? s.link_clicks : s.clicks);
+      r.purchases += nz(s.purchases); r.value += nz(s.purchase_value);
+      const d = r.days[s.day] || (r.days[s.day] = { day: s.day, spend: 0, purchases: 0, orders: 0 }); d.spend += nz(s.spend); d.purchases += nz(s.purchases);
+    }
+    for (const o of Array.isArray(orderRows) ? orderRows : []) {
+      if (!o || !AD_PLATFORM[o.platform] || !/^[0-9]{6,30}$/.test(String(o.campaign || '')) || !inRg(o.day, rg)) continue;
+      const r = row(o.campaign, o.platform);
+      if (SOLD.includes(o.grp)) {
+        r.orders += nz(o.orders); r.sales += nz(o.sales); r.share += nz(o.share); r.sources[o.source || ''] = (r.sources[o.source || ''] || 0) + nz(o.orders);
+        const d = r.days[o.day] || (r.days[o.day] = { day: o.day, spend: 0, purchases: 0, orders: 0 }); d.orders += nz(o.orders);
+      } else r.cancelled += nz(o.orders);
+    }
+    return Object.values(byId).filter((r) => r.spend > 0 || r.orders > 0 || r.cancelled > 0).map((r) => Object.assign(r, {
+      spend: Math.round(r.spend * 100) / 100, mer: ratio(r.sales, r.spend), cpa: ratio(r.spend, r.orders), roas: ratio(r.value, r.spend),
+      days: Object.values(r.days).sort((a, b) => a.day.localeCompare(b.day)),
+    })).sort((a, b) => b.spend - a.spend || b.orders - a.orders);
+  }
+  // the overview's KPIs: Meta's spend and own numbers; the orders and sales from every ad platform (Google / TikTok have no spend
+  // until they are linked); the profit after ads = Ibtekr's share of Meta's orders − the spend (null without accounts.view). `money`
+  // (the caller's admin / accounts.view) decides it when given — with no ad order the share is 0 and the profit is the spend's loss;
+  // without it the rows say (the server sends the share as null to a member without accounts.view)
+  // `linked` (9.5.6): the platforms whose numbers the system reads (the link's state); default the ones with any numbers, else Meta
+  function adTotals(stats, orderRows, rg, money, linked) {
+    const st = dayStats(stats, 'campaign', rg); const o = adOrders(orderRows, rg);
+    const seen = new Set(st.map((x) => x.platform || 'meta')); const L = Array.isArray(linked) ? linked.filter((k) => AD_PLATFORM[k]) : [...seen];
+    const on = new Set(L.length ? L : ['meta']); seen.forEach((k) => on.add(k));
+    const known = typeof money === 'boolean' ? money : o.shareKnown;
+    const by = {}; for (const x of st) { const k = x.platform || 'meta'; const b = by[k] || (by[k] = { spend: 0, purchases: 0, value: 0 }); b.spend += nz(x.spend); b.purchases += nz(x.purchases); b.value += nz(x.purchase_value); }
+    const empty = () => ({ orders: 0, sales: 0, share: 0, cancelled: 0, sources: {} });
+    const linkedOrders = [...on].reduce((a, k) => { const p = o.platforms[k] || empty(); return { orders: a.orders + p.orders, sales: a.sales + p.sales, share: a.share + p.share }; }, { orders: 0, sales: 0, share: 0 });
+    const spend = Math.round(st.reduce((s, x) => s + nz(x.spend), 0) * 100) / 100; const purchases = st.reduce((s, x) => s + nz(x.purchases), 0); const value = st.reduce((s, x) => s + nz(x.purchase_value), 0);
+    const all = Object.values(o.platforms).reduce((a, p) => ({ orders: a.orders + p.orders, sales: a.sales + p.sales, share: a.share + p.share }), { orders: 0, sales: 0, share: 0 });
+    const platforms = Object.keys(AD_PLATFORM).map((k) => { const p = o.platforms[k] || empty(); const b = by[k] || { spend: 0, purchases: 0, value: 0 }; const lk = on.has(k);
+      return { key: k, label: AD_PLATFORM[k], linked: lk, spend: lk ? Math.round(b.spend * 100) / 100 : null, purchases: lk ? b.purchases : null, orders: p.orders, sales: p.sales, sources: p.sources,
+        mer: lk ? ratio(p.sales, b.spend) : null, roas: lk ? ratio(b.value, b.spend) : null }; });
+    return { spend, purchases, value, orders: all.orders, sales: all.sales, metaOrders: linkedOrders.orders, metaSales: linkedOrders.sales, linked: [...on], cancelled: Object.values(o.platforms).reduce((s, p) => s + p.cancelled, 0),
+      mer: ratio(linkedOrders.sales, spend), cpa: ratio(spend, linkedOrders.orders), roas: ratio(value, spend), platformCpa: ratio(spend, purchases),
+      share: known ? Math.round(all.share * 100) / 100 : null, metaShare: known ? Math.round(linkedOrders.share * 100) / 100 : null, profit: known ? Math.round((linkedOrders.share - spend) * 100) / 100 : null, platforms };
+  }
+  // the real return of the last n weeks (7 days each, the last ending on `to`), the oldest first — Meta's spend vs its campaigns' sales
+  function merWeeks(stats, orderRows, to, n, linked) {
+    const out = [];
+    for (let i = (n || 5) - 1; i >= 0; i -= 1) {
+      const end = addD(to, -7 * i); const rg = { from: addD(end, -6), to: end }; const t = adTotals(stats, orderRows, rg, undefined, linked);
+      out.push({ from: rg.from, to: rg.to, spend: t.spend, sales: t.metaSales, mer: t.mer });
+    }
+    return out;
+  }
+  // the media buyer's alerts (decision 45) — rules only, no action: stop? (≥ stopSpend in the last stopDays without an order, an
+  // active campaign), the order's real cost over maxCpa, scale? (real return ≥ scaleMer with ≥ scaleOrders orders, active), check the
+  // tracking (Meta's purchases ≥ trackRatio × Woo's orders, ≥ trackMin)
+  const ALERT_RANK = { error: 0, orange: 1, info: 2, success: 3 };
+  function adAlerts(objects, stats, orderRows, rg, today, rules) {
+    const R = Object.assign({}, ADS_RULES, rules || {}); const out = [];
+    const fmt = (v) => Math.round(v).toLocaleString('en-US');
+    const recent = adCampaignRows(objects, stats, orderRows, { from: addD(today, -(R.stopDays - 1)), to: today });
+    for (const c of recent) {
+      if (c.status !== 'ACTIVE' || c.spend < R.stopSpend || c.orders > 0) continue;
+      out.push({ key: 'stop:' + c.id, tone: 'error', icon: 'alert', campaign: c.id, title: 'وقّف «' + c.name + '»؟', sub: 'صرفت ' + fmt(c.spend) + ' ج.م · ولا أوردر في ووكومرس من ' + R.stopDays + ' أيام',
+        why: 'ميتا بتحسب ' + fmt(c.purchases) + ' مشتريات، بس مفيش ولا أوردر في ووكومرس جاي من الحملة دي (utm_campaign) في آخر ' + R.stopDays + ' أيام.' });
+    }
+    for (const c of adCampaignRows(objects, stats, orderRows, rg)) {
+      if (c.orders > 0 && c.cpa > R.maxCpa) out.push({ key: 'cpa:' + c.id, tone: 'orange', icon: 'clock', campaign: c.id, title: 'تكلفة الأوردر عالية في «' + c.name + '»', sub: 'تكلفة الأوردر الحقيقية ' + fmt(c.cpa) + ' ج.م · الحد ' + fmt(R.maxCpa),
+        why: 'صرفت ' + fmt(c.spend) + ' ج.م وجابت ' + c.orders + ' أوردر في ووكومرس في الفترة.' });
+      if (c.purchases >= R.trackMin && c.purchases >= R.trackRatio * c.orders) out.push({ key: 'track:' + c.id, tone: 'info', icon: 'clock', campaign: c.id, title: 'راجع التتبع في «' + c.name + '»', sub: 'ميتا بتقول ' + fmt(c.purchases) + ' مشتريات · ووكومرس ' + c.orders + ' أوردر',
+        why: 'ممكن البكسل بيعد مرتين أو الـ UTM مش متحط على كل الإعلانات.' });
+      if (c.status === 'ACTIVE' && c.mer != null && c.mer >= R.scaleMer && c.orders >= R.scaleOrders) out.push({ key: 'scale:' + c.id, tone: 'success', icon: 'users', campaign: c.id, title: 'زوّد «' + c.name + '»؟', sub: 'العائد الحقيقي ' + c.mer.toFixed(2) + '× · ' + c.orders + ' أوردر في ووكومرس',
+        why: 'من أعلى عائد حقيقي في الحملات وتكلفة الأوردر ' + fmt(c.cpa) + ' ج.م.' });
+    }
+    return out.sort((a, b) => ALERT_RANK[a.tone] - ALERT_RANK[b.tone]);
+  }
+  // the creatives (one row per ad with spend in the period): Meta's numbers; the frequency weighted by impressions (a day's
+  // frequency is not additive); tired = the frequency at tiredFreq or more (the people saw it too often); the real return per ad
+  // needs utm_content={{ad.id}} in the ads
+  function adCreatives(objects, stats, rg, rules) {
+    const R = Object.assign({}, ADS_RULES, rules || {});
+    const ads = {}, camps = {};
+    for (const o of Array.isArray(objects) ? objects : []) { if (!o) continue; if (o.kind === 'ad') ads[o.id] = o; else if (o.kind === 'campaign') camps[o.id] = o; }
+    const by = {};
+    for (const s of dayStats(stats, 'ad', rg)) {
+      const a = by[s.object_id] || (by[s.object_id] = { id: s.object_id, campaign: s.campaign_id, spend: 0, impressions: 0, clicks: 0, purchases: 0, value: 0, fw: 0 });
+      a.spend += nz(s.spend); a.impressions += nz(s.impressions); a.clicks += nz(s.link_clicks != null ? s.link_clicks : s.clicks); a.purchases += nz(s.purchases); a.value += nz(s.purchase_value);
+      a.fw += nz(s.frequency) * nz(s.impressions);
+    }
+    return Object.values(by).filter((a) => a.spend > 0).map((a) => {
+      const o = ads[a.id] || {}; const c = camps[a.campaign] || {};
+      return { id: a.id, name: o.name || '#' + a.id, campaign: c.name || '#' + a.campaign, status: o.status || null, thumb: typeof o.thumb === 'string' && /^https:\/\//.test(o.thumb) ? o.thumb : null,
+        spend: Math.round(a.spend * 100) / 100, impressions: a.impressions, clicks: a.clicks, purchases: a.purchases, value: a.value,
+        ctr: ratio(a.clicks, a.impressions), frequency: a.impressions ? a.fw / a.impressions : null, roas: ratio(a.value, a.spend),
+        tired: a.impressions > 0 && a.fw / a.impressions >= R.tiredFreq };
+    }).sort((x, y) => y.spend - x.spend);
+  }
+  const xr = (v) => (v == null ? '—' : Number(v).toFixed(2) + '×');
+  // ش45 decision 4 — the designer's (or the header assistant's) filled campaign → the details of «كامبين جديدة» (defaults() + the goal,
+  // the idea and the counts within MAX / VIDEO_MAX — the server's campaignDraft limits); null when it names nothing to make
+  // the owner 17 Nov («الفيدوهات … لما اعمل هوفر عليها تشتغل ولما ادوس عليها تفتحلي»): a trend video's player on its own platform —
+  // TikTok's player (muted, looping, without its controls), Instagram's embed, Facebook's video plugin (muted) — from the post's link
+  // only (https on the platform's own host and its id), else null (a picture post, an article, any other link)
+  function trendEmbed(x) {
+    if (!x || x.kind !== 'video') return null;
+    let u; try { u = new URL(String(x.url || '')); } catch (e) { return null; }
+    if (u.protocol !== 'https:' || u.port || u.username || u.password) return null;
+    const host = u.hostname.toLowerCase(); const p = u.pathname; let m;
+    if (/(^|\.)tiktok\.com$/.test(host) && (m = /\/video\/(\d{6,30})/.exec(p))) return 'https://www.tiktok.com/player/v1/' + m[1] + '?autoplay=1&muted=1&loop=1&controls=0&progress_bar=0&play_button=0&volume_control=0&fullscreen_button=0&music_info=0&description=0&rel=0&native_context_menu=0&closed_caption=0';
+    if (/(^|\.)instagram\.com$/.test(host) && (m = /^\/(?:[^/]+\/)?(p|reel|reels|tv)\/([A-Za-z0-9_-]{5,40})/.exec(p))) return 'https://www.instagram.com/' + (m[1] === 'p' ? 'p' : 'reel') + '/' + m[2] + '/embed/';
+    if (/(^|\.)facebook\.com$/.test(host) && /\/(reel|videos|watch)\b/.test(p)) return 'https://www.facebook.com/plugins/video.php?href=' + encodeURIComponent(u.origin + u.pathname + (u.searchParams.get('v') ? '?v=' + u.searchParams.get('v') : '')) + '&autoplay=true&mute=true&show_text=false';
+    return null;
+  }
+  function draftOf(d) {
+    if (!d || typeof d !== 'object') return null;
+    const idea = String(d.idea == null ? '' : d.idea).replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
+    const n = (v) => clamp(v, 0, MAX.count);
+    const post = n(d.post), carousel = n(d.carousel), video = n(d.video);
+    if (!idea || !(post + carousel + video)) return null;
+    const w = defaults();
+    w.goal = GOALS.includes(d.goal) ? d.goal : GOALS[0]; w.idea = idea;
+    w.media.post.count = post; w.media.carousel.count = carousel; w.media.video.count = video;
+    if (carousel) w.media.carousel.slides = clamp(d.slides || 4, 2, MAX.slides);
+    if (video) w.media.video.dur = clamp(d.dur || 15, 5, VIDEO_MAX);
+    w.mediaTab = post ? 'post' : carousel ? 'carousel' : 'video';
+    return w;
+  }
+
+  const api = { PRICE_DEMO, VIDEO_SOON, VSIZES, videoImgSize, videoMethod, estimateVideo, METHOD_RATE, GOALS, MEDIA, VIDEO_RATE, METHODS, MAX, TEXT_FILL, DEFAULT_MODEL, clamp, defaults, buildPieces, splitScenes, CLIP, VIDEO_MAX, clipSeconds, sceneSeconds, scenesPending, sceneDurOf, videoSeconds, setSceneDur, setSceneD, setSceneCount, keepSceneDurs, cost, spend, built, approvable, approved, approveAll, progress, canBuildNext, canReviewNext, validateDetails, estimate, imgRate, videoRate,
+    adLibraryUrl, competitorPage, competitorRow, draftOf, trendEmbed,
+    campaignStatus, campaignName, PLATFORMS, CONNECTED, POST_STATUSES, CAP_MAX, TAGS, TIMES, timeOpts, postKind, pieceImages, hookOf, addD, suggest, scheduleItems, isPast, canMove, moveCheck, safeName, zipPlan,
+    PUBLISHABLE, PUB_KINDS, MAX_IMAGES, PL_KEY, pubText, notReady, publishable, pubImages, isVideoPath, igFit, jpegSize, isJpeg, PUB_ERRORS, pubError, seenSt, engOf, postTotals, SRC_LABEL,
+    get DAYS() { return days(); }, dayIdx, wkStart, weeksOf, planDefault, D2, dayLabel, relDay, pct, linkKeys,
+    ADS_RULES, AD_PLATFORM, AD_LINK_FIELDS, AD_OAUTH, linkFieldsBody, SOLD, adOrders, adCampaignRows, adTotals, merWeeks, adAlerts, adCreatives, xr };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.IbtekrCampWiz = api;
+})(typeof window !== 'undefined' ? window : globalThis);

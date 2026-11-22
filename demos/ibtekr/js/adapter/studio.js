@@ -1,0 +1,285 @@
+// Studio (phase 5.2, docs/superpowers/plans/2026-10-28-phase-5-2-studio.md): the product studio's data — studio_batches (a batch's
+// state: its products, settings and image paths; read and written with products.add = F), sku_colors (the colors list, decision 3),
+// sku_serial (the site-wide serial, decision 2: sku_serial_take reserves numbers right before an upload), the private bucket `studio`
+// (images until the upload, decision 6), woo-sync studio_upload / category_create (decisions 7 / 8 — the server checks
+// products.add and WOO_PUSH_ENABLED) and studio_sheet (decision 13: a Google Sheets link, read by the server). Every write returns a Promise of { ok, … } and never throws; reason 'forbidden' / 'invalid' /
+// 'network' / 'push_disabled'. Every upload the site took is logged through IBActivity.log as product.create (ids and SKUs only).
+(function () {
+  'use strict';
+  const BUCKET = 'studio';
+  // flow: the studio's three flows (docs/superpowers/plans/2026-11-14-studio-flows.md) keep state.flow = 2 — the saved-work list
+  // opens those batches in the new page (a JSON path, read only)
+  const COLS = 'id, title, brand_id, vendor_id, type, step, status, result, updated_at, archived_at, flow:state->flow';
+  const c = () => (window.IBSupabase && window.IBSupabase.client) || null;
+  const quiet = (fn) => { try { return fn(); } catch (e) { return undefined; } };
+  const emit = (detail) => quiet(() => document.dispatchEvent(new CustomEvent('ib:studio', { detail: detail || {} })));
+  const perm = (key) => (window.IBDirectory && window.IBDirectory.perm ? window.IBDirectory.perm(key) : 'N');
+  const can = () => perm('products.add') === 'F';
+
+  let st = 'idle'; let gen = 0;
+  let batches = []; let colors = []; let nextSerial = null;
+  const urls = new Map(); // path → { url, at }
+
+  // opts.quiet (IBLive — 0104): a live re-read of what is already shown — no «loading» state, and a failed read keeps it
+  async function load(opts) {
+    const cl = c(); if (!cl) return;
+    if (!can()) { st = 'ready'; emit(); return; }
+    const soft = !!(opts && opts.quiet) && st === 'ready';
+    const g = ++gen; if (!soft) { st = 'loading'; emit(); }
+    try {
+      const [b, k, s] = await Promise.all([
+        cl.from('studio_batches').select(COLS).is('archived_at', null).order('updated_at', { ascending: false }).limit(100),
+        cl.from('sku_colors').select('id, name_en, name_ar, code, hex').order('name_en', { ascending: true }),
+        cl.from('sku_serial').select('next').eq('id', 1).maybeSingle(),
+      ]);
+      if (g !== gen) return;
+      if (b.error || k.error) throw b.error || k.error;
+      batches = b.data || []; colors = k.data || []; nextSerial = s && s.data ? Number(s.data.next) : null;
+      st = 'ready';
+    } catch (e) { if (soft) return; if (g === gen) st = 'error'; }
+    if (g === gen) emit();
+  }
+  const ensure = () => { if (st === 'idle' || st === 'error') load(); };
+
+  async function open(id) {
+    const cl = c(); if (!cl) return null;
+    try { const { data, error } = await cl.from('studio_batches').select(COLS + ', state').eq('id', id).maybeSingle(); return error ? null : data; } catch (e) { return null; }
+  }
+  async function create(row) {
+    const cl = c(); if (!cl) return { ok: false, reason: 'network' };
+    try {
+      const { data, error } = await cl.from('studio_batches').insert({ title: row.title, brand_id: row.brand_id || null, vendor_id: row.vendor_id || null, type: row.type, state: row.state || {}, step: row.step || 1 }).select(COLS).single();
+      if (error) return { ok: false, reason: error.code === '42501' ? 'forbidden' : 'invalid' };
+      batches = [data].concat(batches.filter((b) => b.id !== data.id)); emit({ id: data.id });
+      return { ok: true, id: data.id };
+    } catch (e) { return { ok: false, reason: 'network' }; }
+  }
+  async function save(id, patch) {
+    const cl = c(); if (!cl) return { ok: false, reason: 'network' };
+    const allowed = {}; ['title', 'brand_id', 'vendor_id', 'type', 'state', 'step'].forEach((k) => { if (patch[k] !== undefined) allowed[k] = patch[k]; });
+    try {
+      const { data, error } = await cl.from('studio_batches').update(allowed).eq('id', id).select(COLS).maybeSingle();
+      if (error || !data) return { ok: false, reason: error && error.code === '42501' ? 'forbidden' : 'network' };
+      batches = batches.map((b) => (b.id === id ? data : b)); emit({ id });
+      return { ok: true, row: data };
+    } catch (e) { return { ok: false, reason: 'network' }; }
+  }
+  async function archive(id) {
+    const cl = c(); if (!cl) return { ok: false, reason: 'network' };
+    try {
+      const { error } = await cl.from('studio_batches').update({ archived_at: new Date().toISOString() }).eq('id', id);
+      if (error) return { ok: false, reason: 'network' };
+      batches = batches.filter((b) => b.id !== id); emit({ id });
+      return { ok: true };
+    } catch (e) { return { ok: false, reason: 'network' }; }
+  }
+
+  // ---------- colors (decision 3) ----------
+  async function addColor(row) {
+    const cl = c(); if (!cl) return { ok: false, reason: 'network' };
+    try {
+      const { data, error } = await cl.from('sku_colors').insert({ name_en: row.name_en, name_ar: row.name_ar, code: row.code, hex: row.hex || null }).select('id, name_en, name_ar, code, hex').single();
+      if (error) return { ok: false, reason: error.code === '23505' ? 'taken' : error.code === '42501' ? 'forbidden' : 'invalid' };
+      colors = colors.concat(data).sort((a, b) => a.name_en.localeCompare(b.name_en)); emit({ colors: true });
+      quiet(() => window.IBActivity && window.IBActivity.log('product.color.add', data.name_en + ' · ' + data.code, { entity: 'sku_colors', entity_id: String(data.id) }));
+      return { ok: true, color: data };
+    } catch (e) { return { ok: false, reason: 'network' }; }
+  }
+
+  // ---------- the serial (decision 2) ----------
+  async function takeSerials(n) {
+    const cl = c(); if (!cl) return { ok: false, reason: 'network' };
+    try {
+      const { data, error } = await cl.rpc('sku_serial_take', { n });
+      if (error || !Number.isInteger(Number(data))) return { ok: false, reason: error && error.code === '42501' ? 'forbidden' : 'network' };
+      nextSerial = Number(data) + n; return { ok: true, first: Number(data) };
+    } catch (e) { return { ok: false, reason: 'network' }; }
+  }
+
+  // ---------- images (decision 6): JPEG in the browser, the private bucket until the upload ----------
+  // a File → a JPEG Blob (longest side ≤ 2000 px, quality 0.9; phase 5.4: JPEG, not WebP — Magnific takes JPG / PNG references
+  // only, and WordPress takes both); null when the browser cannot read it. The name toWebp stays for its callers.
+  function toWebp(file, max) {
+    return new Promise((resolve) => {
+      const url = quiet(() => URL.createObjectURL(file)); if (!url) return resolve(null);
+      const im = new Image();
+      im.onload = () => {
+        try {
+          const m = max || 2000; const k = Math.min(1, m / Math.max(im.naturalWidth, im.naturalHeight));
+          const cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(im.naturalWidth * k)); cv.height = Math.max(1, Math.round(im.naturalHeight * k));
+          const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height); ctx.drawImage(im, 0, 0, cv.width, cv.height);
+          cv.toBlob((b) => { URL.revokeObjectURL(url); resolve(b); }, 'image/jpeg', 0.9);
+        } catch (e) { URL.revokeObjectURL(url); resolve(null); }
+      };
+      im.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      im.src = url;
+    });
+  }
+  const safe = (s) => String(s || 'img').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'img';
+  // the three flows: the site's files are «…-NN.webp» (the owner's links) — a real WebP when the browser writes one, else JPEG
+  function toRealWebp(file, max) {
+    return new Promise((resolve) => {
+      const url = quiet(() => URL.createObjectURL(file)); if (!url) return resolve(null);
+      const im = new Image();
+      im.onload = () => {
+        try {
+          const m = max || 2000; const k = Math.min(1, m / Math.max(im.naturalWidth, im.naturalHeight));
+          const cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(im.naturalWidth * k)); cv.height = Math.max(1, Math.round(im.naturalHeight * k));
+          const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height); ctx.drawImage(im, 0, 0, cv.width, cv.height);
+          cv.toBlob((b) => { URL.revokeObjectURL(url); if (b && b.type === 'image/webp') return resolve(b); cv.toBlob((j) => resolve(j), 'image/jpeg', 0.9); }, 'image/webp', 0.88);
+        } catch (e) { URL.revokeObjectURL(url); resolve(null); }
+      };
+      im.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      im.src = url;
+    });
+  }
+  // file → { ok, path } at studio/<batch>/<name>.jpg (opts.webp: .webp when the browser writes WebP — the three flows)
+  async function uploadImage(batchId, file, name, opts) {
+    const cl = c(); if (!cl) return { ok: false, reason: 'network' };
+    const blob = opts && opts.webp ? await toRealWebp(file) : await toWebp(file); if (!blob) return { ok: false, reason: 'not_image' };
+    const webp = blob.type === 'image/webp';
+    const path = batchId + '/' + safe(name) + '-' + Date.now().toString(36) + (webp ? '.webp' : '.jpg');
+    try {
+      const { error } = await cl.storage.from(BUCKET).upload(path, blob, { contentType: webp ? 'image/webp' : 'image/jpeg', upsert: false });
+      if (error) return { ok: false, reason: 'network' };
+      return { ok: true, path };
+    } catch (e) { return { ok: false, reason: 'network' }; }
+  }
+  // a batch photo's bytes (the three flows: the ZIP of the named photos, the reference picture inside the sheet) → Uint8Array | null
+  async function bytesOf(path) {
+    const cl = c(); if (!cl || !path) return null;
+    try { const { data, error } = await cl.storage.from(BUCKET).download(path); if (error || !data) return null; return new Uint8Array(await data.arrayBuffer()); } catch (e) { return null; }
+  }
+  async function removeImage(path) { const cl = c(); if (!cl) return; quiet(() => cl.storage.from(BUCKET).remove([path])); urls.delete(path); }
+  // a signed URL for a thumbnail (an hour; cached 50 minutes); null while it loads (ib:studio { url } when it lands)
+  function imageUrl(path) {
+    if (!path) return null;
+    const hit = urls.get(path);
+    if (hit && hit.url && Date.now() - hit.at < 50 * 60 * 1000) return hit.url;
+    if (hit && hit.loading) return null;
+    const cl = c(); if (!cl) return null;
+    urls.set(path, { loading: true, at: Date.now() });
+    Promise.resolve(cl.storage.from(BUCKET).createSignedUrl(path, 3600)).then(({ data }) => {
+      const u = data && typeof data.signedUrl === 'string' && data.signedUrl.startsWith('https://') ? data.signedUrl : null;
+      urls.set(path, { url: u, at: Date.now() }); emit({ url: path });
+    }, () => urls.delete(path));
+    return null;
+  }
+
+  // ---------- woo-sync (decisions 7 / 8) ----------
+  async function invoke(body) {
+    const cl = c(); if (!cl) return { ok: false, reason: 'network' };
+    try {
+      const { data, error } = await cl.functions.invoke('woo-sync', { body });
+      if (error || !data) {
+        const s = error && error.context && error.context.status;
+        let b = null; try { b = error && error.context && typeof error.context.json === 'function' ? await error.context.json() : null; } catch (e) { b = null; }
+        // B4: a category still in use answers 409 { error: has_products | has_children | has_makers, count } — said as it is
+        if (s === 409) return { ok: false, reason: 'conflict', error: b && typeof b.error === 'string' ? b.error : 'conflict', count: b && Number.isInteger(b.count) ? b.count : null };
+        return { ok: false, reason: s === 401 || s === 403 ? 'forbidden' : s === 400 ? 'invalid' : s === 404 ? 'missing' : 'network', field: b && b.field ? String(b.field) : null };
+      }
+      return { ok: true, body: data };
+    } catch (e) { return { ok: false, reason: 'network' }; }
+  }
+  // one batch item to the site → { ok, result: 'ok' | 'error' | 'skipped', item: { productId, arId, sku, author, variations, error, … }, reason }
+  async function upload(batchId, index) {
+    const r = await invoke({ action: 'studio_upload', batch_id: batchId, index });
+    if (!r.ok) return r;
+    if (r.body.result === 'skipped') return { ok: true, result: 'skipped', reason: r.body.reason || 'push_disabled' };
+    const item = r.body.item || {};
+    if (item.productId) quiet(() => window.IBActivity && window.IBActivity.log('product.create', '#' + item.productId + (item.arId ? ' #' + item.arId : '') + ' · ' + (item.sku || ''), { entity: 'products', entity_id: String(item.productId) }));
+    if (item.productId && window.IBProducts && window.IBProducts.refresh) quiet(() => window.IBProducts.refresh([item.productId].concat(item.arId ? [item.arId] : [])));
+    return { ok: true, result: r.body.result, item };
+  }
+  // the three flows (decision 10): one batch photo to the site's media library under the sheet's name → { ok, result, id, url }
+  async function media(batchId, path, name) {
+    const r = await invoke({ action: 'studio_media', batch_id: batchId, path, name });
+    if (!r.ok) return r;
+    if (r.body.result === 'skipped') return { ok: true, result: 'skipped', reason: r.body.reason || 'push_disabled' };
+    return { ok: true, result: 'ok', id: Number(r.body.id) || null, url: typeof r.body.url === 'string' && r.body.url.startsWith('https://') ? r.body.url : null };
+  }
+  // B4 (the owner, 11 Nov): a category's image (the page's square crop, a Blob) goes to woo-sync as base64 — the server checks the bytes
+  const base64Of = async (blob) => { const b = new Uint8Array(await blob.arrayBuffer()); let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
+  const imageOf = async (blob) => (blob && typeof blob.arrayBuffer === 'function' ? { data: await base64Of(blob) } : undefined);
+  async function createCategory(row) {
+    const r = await invoke({ action: 'category_create', name_en: row.name_en, name_ar: row.name_ar || null, parent: row.parent || 0, slug: row.slug || undefined, image: await imageOf(row.image) });
+    if (!r.ok) return r;
+    if (r.body.result !== 'ok') return { ok: false, reason: r.body.reason || r.body.result };
+    quiet(() => window.IBProducts && window.IBProducts.addCategory && window.IBProducts.addCategory({ id: r.body.id, name: row.name_en, parent_id: row.parent || null, slug: row.slug || null, image_url: r.body.image || null }));
+    quiet(() => window.IBActivity && window.IBActivity.log('product.category.create', '#' + r.body.id + ' · ' + row.name_en, { entity: 'woo_categories', entity_id: String(r.body.id) }));
+    return { ok: true, id: r.body.id, arId: r.body.ar_id || null };
+  }
+  // B4: the categories tab — a category live from the site for «تعديل» → { ok, category: { id, name, parent, count, image }, ar: {…} | null }
+  async function categoryGet(id) {
+    const r = await invoke({ action: 'category_get', id: Number(id) });
+    if (!r.ok) return r;
+    if (r.body.result !== 'ok') return { ok: false, reason: r.body.reason || 'network' };
+    return { ok: true, category: r.body.category || null, ar: r.body.ar || null };
+  }
+  // what changed only ({ id, name_en?, name_ar?, image? }) → { ok, ar: 'ok' | 'made' | 'none' | 'not_linked' | code }
+  async function categoryUpdate(row) {
+    const r = await invoke({ action: 'category_update', id: Number(row.id), name_en: row.name_en || undefined, name_ar: row.name_ar || undefined, slug: row.slug || undefined, parent: row.parent == null ? undefined : Number(row.parent), image: await imageOf(row.image) });
+    if (!r.ok) return r;
+    if (r.body.result !== 'ok') return { ok: false, reason: r.body.reason || r.body.result };
+    const patch = Object.assign({}, row.name_en ? { name: row.name_en } : {}, row.slug ? { slug: row.slug } : {}, row.parent != null ? { parent_id: Number(row.parent) || null } : {}, r.body.image ? { image_url: r.body.image } : {});
+    if (Object.keys(patch).length) quiet(() => window.IBProducts && window.IBProducts.patchCategory && window.IBProducts.patchCategory(Number(row.id), patch));
+    const what = [row.name_en ? 'name' : null, row.name_ar ? 'name_ar' : null, row.slug ? 'slug' : null, row.parent != null ? 'parent' : null, row.image ? 'image' : null].filter(Boolean).join(', ');
+    quiet(() => window.IBActivity && window.IBActivity.log('product.category.update', '#' + row.id + ' · ' + what, { entity: 'woo_categories', entity_id: String(row.id) }));
+    return { ok: true, ar: r.body.ar || 'none', image: r.body.image || null };
+  }
+  // comments decision 56 (the owner 15 Nov — the categories' order written to the site): one parent's children in their new order
+  // (parent 0 = the main categories) → woo-sync category_order → { ok, moved, ar } | { ok: false, reason: 'stale' | … }
+  async function categoryOrder(parent, ids) {
+    const list = (ids || []).map(Number).filter((x) => Number.isInteger(x) && x > 0);
+    if (list.length < 2) return { ok: false, reason: 'invalid' };
+    const r = await invoke({ action: 'category_order', parent: Number(parent) || 0, ids: list });
+    if (!r.ok) return r.status === 409 || r.error === 'stale' ? Object.assign(r, { reason: 'stale' }) : r;
+    if (r.body.result !== 'ok') return { ok: false, reason: r.body.reason || r.body.result };
+    quiet(() => window.IBProducts && window.IBProducts.orderCategories && window.IBProducts.orderCategories(list));
+    quiet(() => window.IBActivity && window.IBActivity.log('product.category.order', (Number(parent) ? '#' + Number(parent) : 'main') + ' · ' + list.length + ' categories', { entity: 'woo_categories', entity_id: Number(parent) ? String(Number(parent)) : null }));
+    return { ok: true, moved: Number(r.body.moved) || 0, ar: r.body.ar || 'none' };
+  }
+  // for good (no trash for a category on WooCommerce) → { ok } | { ok: false, reason: 'conflict', error: has_products | has_children | has_makers, count }
+  async function categoryDelete(id, name) {
+    const r = await invoke({ action: 'category_delete', id: Number(id) });
+    if (!r.ok) return r;
+    if (r.body.result !== 'ok') return { ok: false, reason: r.body.reason || r.body.result };
+    quiet(() => window.IBProducts && window.IBProducts.removeCategory && window.IBProducts.removeCategory(Number(id)));
+    quiet(() => window.IBActivity && window.IBActivity.log('product.category.delete', '#' + id + (name ? ' · ' + name : ''), { entity: 'woo_categories', entity_id: String(id) }));
+    return { ok: true, ar: r.body.ar || 'none' };
+  }
+
+  // a Google Sheets link (decision 13: published to the web, or shared with anyone) → { ok, csv }: read by woo-sync, never by
+  // the browser (Google answers its CSV with no CORS); reason 'bad_link' / 'not_published' / 'too_big' / 'unreachable' / …
+  async function readSheetLink(url) {
+    const r = await invoke({ action: 'studio_sheet', url: String(url == null ? '' : url).trim().slice(0, 2000) });
+    if (!r.ok) return { ok: false, reason: r.reason === 'invalid' ? 'bad_link' : r.reason };
+    if (r.body.result !== 'ok' || typeof r.body.csv !== 'string') return { ok: false, reason: r.body.reason || 'unreachable' };
+    return { ok: true, csv: r.body.csv };
+  }
+
+  // the shop's own styles (comments decision 51): the terms of the site's «Product Style» attribute with their Arabic names — read
+  // once a session (woo-sync `styles`, a read), [] while they are not known (the page then keeps its own list)
+  let styles = null; let stylesP = null;
+  function siteStyles() { return styles || []; }
+  async function loadStyles(force) {
+    if (styles && !force) return styles;
+    if (!stylesP) stylesP = (async () => {
+      const r = await invoke({ action: 'styles' });
+      const list = r.ok && r.body && r.body.result === 'ok' && Array.isArray(r.body.styles) ? r.body.styles : null;
+      if (list) { styles = list.filter((x) => x && typeof x.en === 'string' && x.en.trim()).map((x) => ({ en: x.en.trim(), ar: typeof x.ar === 'string' ? x.ar.trim() : '' })); emit({ styles: true }); }
+      stylesP = null; return styles || [];
+    })();
+    return stylesP;
+  }
+
+  function clear() { gen++; st = 'idle'; batches = []; colors = []; nextSerial = null; urls.clear(); styles = null; stylesP = null; }
+
+  window.IBStudio = {
+    load, ensure, clear, state: () => st, can, BUCKET,
+    batches: () => batches.slice(), colors: () => colors.slice(), nextSerial: () => nextSerial,
+    open, create, save, archive, addColor, takeSerials, toWebp, uploadImage, removeImage, imageUrl, upload, createCategory, readSheetLink, siteStyles, loadStyles,
+    media, bytesOf, // the three flows (14 Nov)
+    categoryGet, categoryUpdate, categoryDelete, categoryOrder, // B4 (11 Nov): the categories tab · categoryOrder: comments decision 56
+  };
+})();

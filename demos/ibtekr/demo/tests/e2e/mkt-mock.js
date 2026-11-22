@@ -1,0 +1,922 @@
+// Phase 9.5.1 (0049): the marketing tables, RPCs and the bucket «marketing», emulated for supabase-mock.mjs (not a test file itself).
+// mktState(opts) seeds the rows as the database holds them (opts.mktCampaigns / mktPosts / mktTemplates / mktObjects — path → { type };
+// opts.mktCap = the month's image credit cap of the settings row «ai» (null = none), opts.mktUsed = the team's credits this month);
+// mktRoute(c) answers a request of those paths (or returns null): RLS as 0049 reads it (marketing.view ≠ N reads; marketing.create F
+// writes the campaigns and templates by their granted columns and uploads into an open campaign's folder or templates/; the log's
+// rows only through mkt_schedule / mkt_post_act with marketing.publish F and the day / hour rules on Cairo's clock). The AI actions
+// (ai-images campaign / campaign_edit, ai-content marketing) are answered here too (mktAi). Every RPC / function call lands in
+// mkt.calls, every write the client sent in mkt.writes ({ table, op, ...columns }).
+import { agentImagePath, agentTitle, campaignGenPath, campaignPathOk, campaignTarget, cleanAgent, cleanBuyer, cleanMarketing, parseAgent, parseAgentImage, parseBuyer, parseCampaign, parseCampaignEdit, parseMarketing, campaignTargets, flowKey, campaignRefs, placeImage } from '../../supabase/functions/_shared/marketing.js';
+import { BUYER_DEFAULTS, MAX_STEP, budgetPlan, rulesPatch } from '../../supabase/functions/_shared/mkt-ads.js';
+import { PLATFORMS as AD_PLATFORMS, linkAccount, linkPublic, linkReady, parseLink, platformOf } from '../../supabase/functions/_shared/mkt-ads-link.js';
+import { MAX_OPEN_JOBS, cleanScenes, jobView, mixPlan, nextMix, parseVideo, videoPath } from '../../supabase/functions/_shared/mkt-video.js';
+import { creditsFor } from '../../supabase/functions/_shared/ai-images.js';
+import { refName, refUrl } from '../../supabase/functions/_shared/ref-link.js';
+import { cleanTrends, parseTrends } from '../../supabase/functions/_shared/mkt-trends.js';
+const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const cairo = (d = new Date()) => { const p = Object.fromEntries(fmt.formatToParts(d).map((x) => [x.type, x.value])); return { day: p.year + '-' + p.month + '-' + p.day, hm: p.hour + ':' + p.minute }; };
+export const mktToday = () => cairo().day;
+export const mktAddDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+export const MKT_ID = (n) => 'f0000000-0000-4000-8000-' + String(n).padStart(12, '0'); // the n-th campaign (seeded 1–9, inserted from 101)
+export const MKT_TPL = (n) => 'f1000000-0000-4000-8000-' + String(n).padStart(12, '0');
+const PNG_1PX = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+const COLS = {
+  mkt_campaigns: ['id', 'name', 'goal', 'step', 'state', 'scheduled_at', 'created_by', 'created_at', 'updated_by', 'updated_at', 'archived_at', 'archived_by'],
+  mkt_posts: ['id', 'campaign_id', 'piece', 'kind', 'name', 'caption', 'caption_orig', 'tags', 'images', 'platform', 'day', 'time', 'how', 'status', 'was_live', 'post_url', 'published_at', 'published_by', 'deleted_at', 'deleted_by', 'created_by', 'created_at', 'updated_by', 'updated_at',
+    'src', 'external_id', 'thumb', 'views', 'reach', 'likes', 'comments', 'shares', 'saves', 'eng', 'stats_at', 'error', 'attempts', 'claimed_at', 'work'],
+  mkt_templates: ['id', 'name', 'kind', 'image', 'descr', 'used', 'created_by', 'created_at', 'updated_by', 'updated_at', 'deleted_at', 'deleted_by'],
+  // 0052 (9.5.3): Meta's ad objects and daily numbers — read with marketing.view, written by mkt-ads only
+  mkt_ad_objects: ['platform', 'kind', 'id', 'parent_id', 'name', 'status', 'thumb', 'meta', 'updated_at'],
+  mkt_ad_stats: ['platform', 'level', 'object_id', 'campaign_id', 'day', 'spend', 'impressions', 'reach', 'clicks', 'link_clicks', 'frequency', 'purchases', 'purchase_value', 'updated_at'],
+  // 0053 (9.5.4): the buyer's suggestions (the server's rows, read with marketing.view) and the designer / developer requests
+  mkt_suggestions: ['id', 'platform', 'kind', 'campaign_id', 'campaign_name', 'ad_id', 'title', 'sub', 'why', 'impact', 'pct', 'data', 'status', 'created_at', 'checked_at', 'decided_by', 'decided_at', 'value', 'note', 'result', 'error'],
+  mkt_requests: ['id', 'kind', 'title', 'details', 'project', 'status', 'created_by', 'created_at', 'updated_by', 'updated_at', 'done_at'],
+  // 0054 (9.5.5): the video jobs — the server's rows, read without the Magnific link
+  mkt_video_jobs: ['id', 'campaign_id', 'piece', 'kind', 'scene', 'creation_ref', 'status', 'path', 'bytes', 'duration', 'error', 'data', 'created_by', 'created_at', 'updated_at', 'done_at'],
+  // 0084: the assistants' chats — the member's own (RLS), the turns written by the server only
+  mkt_agent_chats: ['id', 'member_id', 'agent', 'title', 'created_at', 'updated_at', 'deleted_at'],
+  mkt_agent_messages: ['id', 'chat_id', 'role', 'text', 'images', 'run_id', 'created_at'],
+  // 0109 (comments decisions 69 / 70): the designer's trends (the server's rows) and the media buyer's competitors (marketing.create writes)
+  mkt_trends: ['id', 'batch', 'title', 'summary', 'source', 'url', 'kind', 'found_at', 'created_by', 'platform', 'tag', 'thumb', 'author', 'views', 'likes', 'comments', 'posted_at', 'external_id'], // + 0118 (thumb_src / thumb_tries: the server's)
+  mkt_competitors: ['id', 'name', 'page_id', 'page_url', 'keyword', 'note', 'created_by', 'created_at', 'updated_by', 'updated_at', 'archived_at'],
+  site_checks: ['kind', 'data', 'checked_at', 'checked_by'], // the last WordPress updates check (the server's row — decision 71)
+};
+// 0120: the eight assistants the system ships, as the migration seeds them
+const AI_BUILTINS = [['buyer', 'الميديا باير الذكي', 'chart', 'marketing.view', [], 'ميديا باير'], ['designer', 'الديزاينر الذكي', 'image', 'marketing.view', [], 'ديزاينر'], ['dev', 'المبرمج الذكي', 'code', 'marketing.view', [], 'مبرمج'],
+  ['stock', 'المخزن الذكي', 'tag', 'inventory.view', ['inventory', 'orders'], 'اللوجستيك والشحن'], ['cs', 'خدمة العملاء الذكية', 'headset', 'cs.view', ['customers', 'orders', 'tickets'], 'خدمة العملاء'],
+  ['makers', 'خدمة المبتكرين الذكية', 'users', 'vendors.view', ['vendors', 'orders', 'tickets'], 'متابعة المبتكرين'], ['accountant', 'المحاسب الذكي', 'wallet', 'accounts.view', ['expenses', 'sales'], 'الحسابات'],
+  ['hr', 'الموارد البشرية الذكية', 'briefcase', 'hr.view', ['hr', 'tasks'], 'مدير النظام']].map(([id, name, icon, perm, sees, role]) => ({ id, name, icon, perm, sees, role, builtin: true }));
+const KEY = { mkt_campaigns: 'campaigns', mkt_posts: 'posts', mkt_templates: 'templates', mkt_ad_objects: 'adObjects', mkt_ad_stats: 'adStats', mkt_suggestions: 'suggestions', mkt_requests: 'requests', mkt_video_jobs: 'videoJobs', mkt_agent_chats: 'agentChats', mkt_agent_messages: 'agentMsgs', mkt_trends: 'trends', mkt_competitors: 'competitors', site_checks: 'siteChecks' };
+const GRANT = { mkt_campaigns: { insert: ['name', 'goal', 'step', 'state'], update: ['name', 'goal', 'step', 'state', 'archived_at'] },
+  mkt_templates: { insert: ['name', 'kind', 'image', 'descr'], update: ['name', 'kind', 'image', 'descr', 'deleted_at'] },
+  mkt_requests: { insert: [], update: [] } }; // 0082: nothing writes it from a member any more (the requests are team requests)
+const REQ_STATUS = ['جديد', 'بيتعمل', 'جاهز للمراجعة', 'خلص'];
+const GOALS = ['منتج جديد', 'مجموعة جديدة', 'وعي بخدمة', 'عرض / خصم'];
+const KINDS = ['بوست', 'كاروسيل', 'ريل', 'ستوري'];
+const PLATFORMS = ['انستجرام', 'فيسبوك', 'تيك توك'];
+const MIME = ['image/png', 'image/jpeg', 'image/webp', 'video/mp4', 'audio/mpeg', 'audio/mp4', 'audio/x-m4a', 'audio/wav']; // 0054: video and audio too
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HM = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+const line = (v, max) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+const lines = (v) => String(v == null ? '' : v).replace(/\r\n?/g, '\n').replace(/[\u0001-\u0009\u000b-\u001f\u007f]/g, ' ').trim();
+// 0051's columns as a system row starts
+const POST_9_5_2 = { src: 'system', external_id: null, thumb: null, views: null, reach: null, likes: null, comments: null, shares: null, saves: null, eng: null, stats_at: null, error: null, attempts: 0, claimed_at: null, work: null };
+
+// what a trends refresh «finds» when a spec gives no answer of its own (the demo copy shows these): pages and the rows on them
+const TREND_PAGES = [
+  { url: 'https://later.com/blog/instagram-reels-trends/', title: 'Instagram Reels trends', host: 'later.com' },
+  { url: 'https://blog.hootsuite.com/social-media-trends/', title: 'Social media trends', host: 'blog.hootsuite.com' },
+  { url: 'https://newsroom.tiktok.com/en-us/whats-next-trend-report', title: "What's Next trend report", host: 'newsroom.tiktok.com' },
+  { url: 'https://www.canva.com/design-trends/', title: 'Design trends', host: 'canva.com' },
+  { url: 'https://newsroom.pinterest.com/pinterest-predicts/', title: 'Pinterest Predicts', host: 'newsroom.pinterest.com' }];
+// ش39: the posts by the tags — a TikTok video and a Facebook reel the «search» returns (each row gets the first tag)
+const TREND_POSTS = [{ url: 'https://www.tiktok.com/@craft.eg/video/7431000000000000001', title: 'TikTok', host: 'tiktok.com' }, { url: 'https://www.facebook.com/reel/1234567890123', title: 'Facebook', host: 'facebook.com' }];
+const TREND_POST_ROWS = (tags) => [
+  { title: 'فيديو تشكيل الفخار في 15 ثانية', summary: 'إيد بتشكّل القطعة من الأول للآخر بسرعة — اعمل زيه لأي منتج يدوي.', source: 'TikTok', url: TREND_POSTS[0].url, kind: 'video', tag: tags[0], author: '@craft.eg', views: 184000 },
+  { title: 'ريل «ركن قبل وبعد»', summary: 'الركن فاضي وبعدين بالقطعة — النهاية بتوقف السكرول.', source: 'Facebook', url: TREND_POSTS[1].url, kind: 'video', tag: tags[1] || tags[0], views: 52000 }];
+const TREND_ROWS = [
+  { title: 'ريلز «يوم في الورشة» (Behind the craft)', summary: 'لقطات سريعة لإيد المبتكر وهو بيشتغل على القطعة — تنفع لكل منتج مشغول يدوي.', source: 'Later', url: TREND_PAGES[0].url, kind: 'video' },
+  { title: 'كاروسيل «قبل وبعد» للديكور', summary: 'صورة الركن قبل وبعد ما القطعة تتحط فيه — أول صورة «بعد» عشان توقف السكرول.', source: 'Hootsuite', url: TREND_PAGES[1].url, kind: 'image' },
+  { title: 'فيديو «افتح معايا الأوردر» (Unboxing ASMR)', summary: 'صوت الفتح والتغليف من غير كلام — ينفع لهدايا الشتا.', source: 'TikTok Newsroom', url: TREND_PAGES[2].url, kind: 'video' },
+  { title: 'ألوان ترابية وخطوط سيريف كبيرة', summary: 'خلفية بيج أو أخضر زيتي وعنوان بخط سيريف عريض — قريبة من براند إبتكر.', source: 'Canva', url: TREND_PAGES[3].url, kind: 'image' },
+  { title: 'لقطة المنتج في إيد حد (In-hand shot)', summary: 'المنتج متصوّر في الإيد بإضاءة طبيعية بدل الخلفية السادة.', source: 'Pinterest Predicts', url: TREND_PAGES[4].url, kind: 'image' },
+  { title: 'ريلز بنص على الشاشة وإيقاع سريع (3 لقطات في 7 ثواني)', summary: 'تلات لقطات للمنتج على بيت موسيقي، وكل لقطة عليها كلمة.', source: 'Later', url: TREND_PAGES[0].url, kind: 'video' }];
+
+export function mktState(opts = {}) {
+  const now = new Date().toISOString();
+  return {
+    campaigns: (opts.mktCampaigns || []).map((x) => ({ goal: null, step: 1, state: {}, scheduled_at: null, created_by: null, created_at: now, updated_by: null, updated_at: now, archived_at: null, archived_by: null, ...x })),
+    posts: (opts.mktPosts || []).map((x, i) => ({ id: i + 1, campaign_id: null, piece: null, caption: '', caption_orig: x.caption || '', tags: '', images: [], how: 'download', status: 'مجدول', was_live: false, post_url: null,
+      published_at: null, published_by: null, deleted_at: null, deleted_by: null, created_by: null, created_at: now, updated_by: null, updated_at: now, ...POST_9_5_2, ...x })),
+    templates: (opts.mktTemplates || []).map((x) => ({ image: null, descr: '', used: 0, created_by: null, created_at: now, updated_by: null, updated_at: now, deleted_at: null, deleted_by: null, ...x })),
+    objects: new Map(Object.entries(opts.mktObjects || {})),
+    cap: opts.mktCap === undefined ? 5000 : opts.mktCap, used: Number(opts.mktUsed) || 0,
+    calls: [], writes: [], seq: 1000, ncamp: 100, ntpl: 100, signed: 0, down: false,
+    imgFail: null, aiFail: null, aiAnswer: null, // a spec's knobs: imgFail / aiFail = 'ai_cap' | 'busy' | 'not_configured' | 'ai_error' | 'refused'
+    // 9.5.2: mkt-publish's status (opts.mktConn merges over a page linked for publishing with the switch off) and the knobs
+    // pubFail / delFail = a code of ours (token / permission / image …) the next publish_now / delete answers with
+    conn: { autopublish: false, facebook: { linked: true, name: 'Ibtekr Club', publish: true, insights: true }, instagram: { linked: true, name: '@ibtekr.club', publish: true, insights: true }, missing: [], valid: true, configured: true, ...(opts.mktConn || {}) },
+    pubFail: null, delFail: null,
+    // 9.5.3: Meta's objects / daily numbers, the ad orders as mkt_ads_orders answers them (the share nulled without accounts.view),
+    // mkt-ads's status (opts.mktAds merges over a linked account) and the knob adsFail = our code the next sync answers with
+    adObjects: (opts.mktAdObjects || []).map((x) => ({ platform: 'meta', parent_id: null, name: null, status: null, thumb: null, meta: {}, updated_at: now, ...x })),
+    adStats: (opts.mktAdStats || []).map((x) => ({ platform: 'meta', impressions: 0, reach: null, clicks: 0, link_clicks: null, frequency: null, purchases: 0, purchase_value: 0, updated_at: now, ...x })),
+    adOrders: opts.mktAdOrders || [],
+    ads: { configured: true, account: { name: 'Ibtekr Club', currency: 'EGP', status: 'ACTIVE' }, synced_at: now, checked_at: now, error: null, ...(opts.mktAds || {}) },
+    // 9.5.6: the platforms' links as Vault would hold them (opts.mktLinks = { tiktok: { … fields … } }); Meta's link follows opts.mktAds; the
+    // non-secret side (names, candidates) in adsMeta; link writes are recorded by their keys only
+    links: Object.assign({}, opts.mktLinks || {}), adsMeta: Object.assign({}, opts.mktAdsMeta || {}),
+    // 9.5.4: the buyer's suggestions and the requests as the database holds them, the rules (settings «marketing».buyer over the defaults),
+    // the knobs decideFail = our code Meta's write answers with (502), buyerFail / buyerAnswer for the chat, accountDaily = the rest of the account's daily budgets
+    suggestions: (opts.mktSuggestions || []).map((x, i) => ({ id: i + 1, platform: 'meta', campaign_name: null, ad_id: null, sub: null, why: null, impact: null, pct: null, data: {}, status: 'pending', created_at: now, checked_at: now, decided_by: null, decided_at: null, value: null, note: null, result: null, error: null, ...x })),
+    requests: (opts.mktRequests || []).map((x, i) => ({ id: i + 1, details: null, project: null, status: 'جديد', created_by: null, created_at: now, updated_by: null, updated_at: now, done_at: null, ...x })),
+    rules: { ...BUYER_DEFAULTS, ...(opts.mktRules || {}) }, accountDaily: opts.mktAccountDaily == null ? 1000 : Number(opts.mktAccountDaily),
+    // 9.5.5: the video jobs (the bridge's work, finished a poll later), the bridge linked (mktBridge false = not linked), videoDelay = polls a job takes
+    videoJobs: (opts.mktVideoJobs || []).map((x, i) => ({ id: i + 1, scene: null, creation_ref: null, status: 'queued', url: null, path: null, bytes: null, duration: null, error: null, data: {}, created_by: null, created_at: now, updated_at: now, done_at: null, polls: 0, ...x })),
+    bridge: opts.mktBridge !== false, videoDelay: opts.mktVideoDelay == null ? 1 : Number(opts.mktVideoDelay), videoFail: opts.mktVideoFail || null,
+    adsFail: null,
+    // 0084: the assistants' chats and turns as the database holds them (opts.mktAgentChats / mktAgentMsgs), the settings of
+    // settings.marketing.agents (opts.mktAgents), and the knobs agentFail / agentAnswer(req) / agentImgFail
+    agentChats: (opts.mktAgentChats || []).map((x) => ({ title: 'شات جديد', created_at: now, updated_at: now, deleted_at: null, ...x })),
+    agentMsgs: (opts.mktAgentMsgs || []).map((x, i) => ({ id: i + 1, text: '', images: [], run_id: null, created_at: now, ...x })),
+    agents: JSON.parse(JSON.stringify(opts.mktAgents || {})), agentFail: null, agentAnswer: null, agentImgFail: null, nchat: 0,
+    // 0120: the assistants' registry (the eight built-ins unless opts.mktAiAgents) and their one list of rules and skills;
+    // noRegistry = 0120 not applied yet (the RPCs are not there — the page falls back to the three of marketing)
+    aiAgents: (opts.mktAiAgents || AI_BUILTINS).map((x, i) => ({ about: '', intro: '', instructions: '', suggestions: [], role: null, sees: [], builtin: false, sort: (i + 1) * 10, archived_at: null, ...x })),
+    aiKb: (opts.mktAiKb || []).map((x, i) => ({ id: i + 1, text: '', agents: [], ...x })), noRegistry: !!opts.mktNoRegistry, nagent: 0,
+    // 0109: the trends and the competitors as the database holds them (opts.mktTrends / mktCompetitors); noSections = the migration
+    // is not applied yet (the two tables are not there); trendsFail = our code the next refresh answers with; trendsAnswer(req) =
+    // the rows the model «found» (cleaned against trendsResults — the pages the search returned)
+    trends: (opts.mktTrends || []).map((x, i) => ({ id: i + 1, batch: 'b0000000-0000-4000-8000-000000000001', summary: null, kind: 'image', found_at: now, created_by: null, platform: 'web', tag: null, thumb: null, author: null, views: null, likes: null, comments: null, posted_at: null, external_id: null, ...x })),
+    // 0118 (ش39): the designer's tags and sites; igOff = Instagram's hashtag search refused (the feature not granted) or not linked
+    trendCfg: { tags: [...(opts.mktTrendTags || [])], sources: [...(opts.mktTrendSources || [])], adTags: [...(opts.mktAdTags || [])] }, igOff: opts.mktIgOff || null,
+    competitors: (opts.mktCompetitors || []).map((x, i) => ({ id: i + 1, page_id: null, page_url: null, keyword: null, note: null, created_by: null, created_at: now, updated_by: null, updated_at: now, archived_at: null, ...x })),
+    noSections: !!opts.mktNoSections, trendsFail: null, trendsAnswer: null, trendsResults: null,
+    siteChecks: (opts.siteChecks || []).map((x) => ({ kind: 'wp_updates', data: {}, checked_at: now, checked_by: null, ...x })),
+  };
+}
+
+// 0120: who sees an assistant — its page's permission (the admin all); before 0120 the three of marketing by marketing.view
+function agentCanOf(H, isAdmin, hasPerm) {
+  return (u2, a) => { if (!u2) return false; if (H.noRegistry) return ['buyer', 'designer', 'dev'].includes(a) && (isAdmin(u2) || hasPerm(u2, 'marketing.view') !== 'N'); const r = H.aiAgents.find((x) => x.id === a && !x.archived_at); return !!r && (isAdmin(u2) || hasPerm(u2, r.perm) !== 'N'); };
+}
+export function mktRoute(c) {
+  const { method, path, url, hd, u, hasPerm, isAdmin, json, mock, route } = c; const H = mock.mkt; if (!H) return null;
+  const agentCan = agentCanOf(H, isAdmin, hasPerm);
+  const rest = /^\/rest\/v1\/(mkt_[a-z_]+|site_checks)$/.exec(path); const rpc = /^\/rest\/v1\/rpc\/(mkt_[a-z_]+|ai_agent[a-z_]*)$/.exec(path);
+  const sto = /^\/storage\/v1\/object\/(sign\/)?marketing\/(.+)$/.exec(path);
+  const signMany = method === 'POST' && path === '/storage/v1/object/sign/marketing'; // createSignedUrls (ش39 — the trends' pictures)
+  const fn = method === 'POST' && (path === '/functions/v1/ai-images' || path === '/functions/v1/ai-content' || path === '/functions/v1/mkt-publish' || path === '/functions/v1/mkt-ads');
+  if (!(rest && COLS[rest[1]]) && !rpc && !sto && !fn && !signMany) return null;
+  // a signed URL opened with no key (an <img>): any token the mock signed opens the object
+  if (sto && sto[1] && method === 'GET') { const obj = H.objects.get(decodeURIComponent(sto[2])); return obj ? route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*', 'content-type': obj.type || 'image/png' }, body: PNG_1PX }) : json(400, { statusCode: '400', error: 'not_found', message: 'Object not found' }); }
+  if (fn && path === '/functions/v1/mkt-publish') return mktPublish(c, c.body());
+  if (fn && path === '/functions/v1/mkt-ads') return mktAds(c, c.body());
+  if (fn) { const b = c.body(); if (path === '/functions/v1/ai-images' ? !(['campaign', 'campaign_edit', 'agent_image', 'ref_link', 'bridge_campaign', 'bridge_campaign_fetch', 'trend_thumbs'].includes(b.action) || /^video_/.test(String(b.action))) : !['marketing', 'buyer', 'agent', 'trends'].includes(b.action)) return null; return mktAi(c, b); }
+  const refuse = (status, code, message) => json(status, { code, details: null, hint: null, message });
+  if (!u) return sto ? json(401, { statusCode: '401', error: 'Unauthorized', message: 'invalid JWT' }) : refuse(401, '42501', 'permission denied');
+  const view = hasPerm(u, 'marketing.view') !== 'N'; const create = hasPerm(u, 'marketing.create') === 'F'; const publish = hasPerm(u, 'marketing.publish') === 'F';
+  const now = new Date().toISOString(); const { day: today, hm } = cairo();
+  const open = (id) => H.campaigns.find((x) => x.id === id && !x.archived_at) || null;
+
+  if (signMany) {
+    const b = c.body() || {}; const paths = Array.isArray(b.paths) ? b.paths : [];
+    return json(200, paths.map((p) => { const ok = view && !/^agents\//.test(p) && H.objects.has(p); if (ok) H.signed += 1; return ok ? { path: p, signedURL: '/object/sign/marketing/' + p + '?token=mk-' + H.signed, error: null } : { path: p, signedURL: null, error: 'Either the object does not exist or you do not have access to it' }; }));
+  }
+  // ---------- Storage, bucket «marketing» ----------
+  if (sto) {
+    const key = decodeURIComponent(sto[2]);
+    const mine = !/^agents\//.test(key) || key.split('/')[1] === u.id;
+    if (method === 'POST' && sto[1]) {
+      if (!view || !mine || !H.objects.has(key)) return json(400, { statusCode: '400', error: 'not_found', message: 'Object not found' });
+      H.signed += 1; return json(200, { signedURL: '/object/sign/marketing/' + key + '?token=mk-' + H.signed });
+    }
+    if (method === 'GET') { // download (authenticated)
+      const obj = view && mine && H.objects.get(key); if (!obj) return json(400, { statusCode: '400', error: 'not_found', message: 'Object not found' });
+      return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*', 'content-type': obj.type || 'image/png' }, body: PNG_1PX });
+    }
+    if (method === 'POST') {
+      const folder = key.split('/')[0];
+      if (!create || !(folder === 'templates' || open(folder))) return json(403, { statusCode: '403', error: 'Unauthorized', message: 'new row violates row-level security policy' });
+      let type = hd['content-type'] || ''; let bytes = route.request().postDataBuffer() || Buffer.alloc(0);
+      if (/^multipart\/form-data/.test(type)) { const raw = bytes.toString('latin1'); const m = /Content-Type:\s*([^\r\n]+)\r\n\r\n/i.exec(raw); type = m ? m[1].trim() : ''; if (m) { const start = m.index + m[0].length; const end = raw.indexOf('\r\n--', start); bytes = bytes.subarray(start, end < 0 ? undefined : end); } }
+      if (!MIME.includes(type)) return json(415, { statusCode: '415', error: 'invalid_mime_type', message: 'mime type ' + type + ' is not supported' });
+      if (bytes.length > 15728640) return json(413, { statusCode: '413', error: 'Payload too large', message: 'The object exceeded the maximum allowed size' });
+      if (H.objects.has(key)) return json(409, { statusCode: '409', error: 'Duplicate', message: 'The resource already exists' });
+      H.objects.set(key, { type, size: bytes.length, by: u.id }); H.writes.push({ table: 'storage:marketing', op: 'upload', path: key });
+      return json(200, { Key: 'marketing/' + key, Id: 'obj-mk-' + H.objects.size });
+    }
+    return json(405, { statusCode: '405', error: 'method not allowed' });
+  }
+
+  // ---------- the RPCs ----------
+  if (rpc) {
+    const b = c.body(); const name = rpc[1]; H.calls.push({ rpc: name, by: u.id, ...b });
+    const bad = (field) => refuse(400, '22023', 'invalid: ' + field);
+    if (name === 'mkt_credits') return json(200, create ? { cap: H.cap, used: H.used } : null);
+    // 0084: the member deletes their own chat (final); the settings for marketing.view, written by the admin (the three keys, their limits)
+    if (name === 'mkt_agent_chat_delete') {
+      const x = H.agentChats.find((r) => r.id === b.p_id && r.member_id === u.id && !r.deleted_at && agentCan(u, r.agent)); if (!x) return refuse(404, 'P0002', 'chat not found');
+      x.deleted_at = now; H.writes.push({ table: 'mkt_agent_chats', op: 'delete', id: x.id }); return json(200, null);
+    }
+    if (name === 'mkt_agent_settings') return json(200, view || isAdmin(u) ? JSON.parse(JSON.stringify(H.agents)) : {});
+    // 0120: the registry — what the member sees (its page's permission; the admin all and the archived), the admin's writes as 0120's checks
+    if (/^ai_agent/.test(name) && H.noRegistry) return json(404, { code: 'PGRST202', message: 'Could not find the function public.' + name + ' in the schema cache' });
+    if (name === 'ai_agents_list') return json(200, H.aiAgents.filter((a) => (isAdmin(u) ? true : !a.archived_at && hasPerm(u, a.perm) !== 'N')).slice().sort((a, b2) => a.sort - b2.sort)
+      .map((a) => ({ id: a.id, name: a.name, icon: a.icon, perm: a.perm, sees: a.sees, role: a.role, about: a.about, intro: a.intro, instructions: isAdmin(u) ? a.instructions : '', suggestions: a.suggestions, builtin: a.builtin, sort: a.sort, archived: !!a.archived_at })));
+    if (name === 'ai_agent_can') return json(200, agentCan(u, b.p_agent));
+    if (name === 'ai_agent_save') {
+      if (!isAdmin(u)) return refuse(403, '42501', 'admin only');
+      const p = b.p || {}; if (Object.keys(p).some((k) => !['id', 'name', 'icon', 'perm', 'sees', 'role', 'about', 'intro', 'instructions', 'suggestions'].includes(k))) return bad('key');
+      let cur = p.id ? H.aiAgents.find((a) => a.id === p.id) : null; if (p.id && !cur) return refuse(404, 'P0002', 'agent not found');
+      const nm = String(p.name ?? (cur && cur.name) ?? '').trim(); if (nm.length < 2 || nm.length > 40 || /[<>]/.test(nm)) return bad('name');
+      const PERMS = ['marketing.view', 'inventory.view', 'cs.view', 'vendors.view', 'accounts.view', 'hr.view', 'orders.view', 'products.view', 'tickets.view', 'reports.view'];
+      const perm = cur && cur.builtin ? cur.perm : (p.perm || (cur && cur.perm)); if (!PERMS.includes(perm)) return bad('perm');
+      const sees = cur && cur.builtin ? cur.sees : Array.isArray(p.sees) ? [...new Set(p.sees)] : (cur ? cur.sees : []);
+      if (sees.some((k) => !['orders', 'vendors', 'customers', 'tickets', 'tasks', 'expenses', 'sales', 'inventory', 'hr'].includes(k))) return bad('sees');
+      for (const [k, max] of [['about', 300], ['intro', 600], ['instructions', 4000]]) if (p[k] != null && (String(p[k]).length > max || /[<>]/.test(String(p[k])))) return bad(k);
+      if (!cur) { H.nagent += 1; cur = { id: 'c_' + String(H.nagent).padStart(10, '0'), builtin: false, sort: 1000 + H.nagent, archived_at: null, about: '', intro: '', instructions: '', suggestions: [], role: null, sees: [] }; H.aiAgents.push(cur); }
+      Object.assign(cur, { name: nm, icon: p.icon || cur.icon || 'sparkle', perm, sees, role: 'role' in p ? (p.role || null) : cur.role, about: p.about ?? cur.about, intro: p.intro ?? cur.intro, instructions: p.instructions ?? cur.instructions, suggestions: p.suggestions ?? cur.suggestions });
+      H.writes.push({ table: 'ai_agents', op: p.id ? 'save' : 'add', id: cur.id, keys: Object.keys(p).filter((k) => k !== 'id').sort() }); return json(200, cur.id);
+    }
+    if (name === 'ai_agent_archive') {
+      if (!isAdmin(u)) return refuse(403, '42501', 'admin only');
+      const cur = H.aiAgents.find((a) => a.id === b.p_id); if (!cur) return refuse(404, 'P0002', 'agent not found'); if (cur.builtin) return bad('builtin');
+      cur.archived_at = b.p_on === false ? null : now; H.writes.push({ table: 'ai_agents', op: b.p_on === false ? 'restore' : 'archive', id: cur.id }); return json(200, null);
+    }
+    if (name === 'ai_agent_order') {
+      if (!isAdmin(u)) return refuse(403, '42501', 'admin only');
+      const ids = b.p_ids || []; const rest = H.aiAgents.filter((a) => !ids.includes(a.id)).sort((a, b2) => a.sort - b2.sort);
+      ids.map((id) => H.aiAgents.find((a) => a.id === id)).filter(Boolean).concat(rest).forEach((a, i) => { a.sort = (i + 1) * 10; }); H.writes.push({ table: 'ai_agents', op: 'order', n: ids.length }); return json(200, null);
+    }
+    if (name === 'ai_agent_kb_list') return json(200, isAdmin(u) ? H.aiKb.map((k) => ({ id: k.id, kind: k.kind, section: k.section, title: k.title, text: k.text, agents: k.agents })) : []);
+    if (name === 'ai_agent_kb_set') {
+      if (!isAdmin(u)) return refuse(403, '42501', 'admin only');
+      if (!['rules', 'skills'].includes(b.p_kind)) return bad('kind'); const L = b.p_items; if (!Array.isArray(L) || L.length > 200) return bad('items');
+      const out = [];
+      for (const it of L) {
+        const sec = String(it.section || '').trim(); const t = String(it.title || '').trim(); const x = String(it.text || '').trim();
+        if (!sec || sec.length > 60 || /[<>]/.test(sec)) return bad('section'); if (!t || t.length > 80 || /[<>]/.test(t)) return bad('title'); if (x.length > 1500 || /[<>]/.test(x)) return bad('text');
+        const ag = [...new Set(it.agents || [])]; if (ag.some((a) => !H.aiAgents.some((r) => r.id === a))) return bad('agents');
+        out.push({ kind: b.p_kind, section: sec, title: t, text: x, agents: ag });
+      }
+      let nid = H.aiKb.reduce((m, k) => Math.max(m, k.id), 0); H.aiKb = H.aiKb.filter((k) => k.kind !== b.p_kind).concat(out.map((k) => ({ id: ++nid, ...k })));
+      H.writes.push({ table: 'ai_agent_kb', op: 'set', kind: b.p_kind, items: out.length }); return json(200, out.length);
+    }
+    if (name === 'mkt_agent_settings_set') {
+      if (!isAdmin(u)) return refuse(403, '42501', 'admin only');
+      if (!['buyer', 'designer', 'dev'].includes(b.p_agent)) return bad('agent');
+      const cfg = b.p_cfg; if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return bad('cfg');
+      if (Object.keys(cfg).some((k) => !['intro', 'instructions', 'suggestions'].includes(k))) return bad('key');
+      const cur = { ...(H.agents[b.p_agent] || {}) };
+      if ('intro' in cfg) { const t = String(cfg.intro || '').trim(); if (t.length > 600 || /[<>]/.test(t)) return bad('intro'); cur.intro = t; }
+      if ('instructions' in cfg) { const t = String(cfg.instructions || '').trim(); if (t.length > 4000 || /[<>]/.test(t)) return bad('instructions'); cur.instructions = t; }
+      if ('suggestions' in cfg) { const L = cfg.suggestions; if (!Array.isArray(L) || L.length > 8 || L.some((x) => typeof x !== 'string' || !x.trim() || x.trim().length > 80 || /[<>]/.test(x))) return bad('suggestions'); cur.suggestions = L.map((x) => x.trim()); }
+      H.agents[b.p_agent] = cur; H.writes.push({ table: 'settings', op: 'agents', agent: b.p_agent, keys: Object.keys(cfg) }); return json(200, cur);
+    }
+    // 0118 (ش40): the assistants' rules and skills — the admin, sections of { title, text } within their limits
+    if (name === 'mkt_agent_kb_set') {
+      if (!isAdmin(u)) return refuse(403, '42501', 'admin only');
+      if (!['buyer', 'designer', 'dev'].includes(b.p_agent)) return bad('agent'); if (!['rules', 'skills'].includes(b.p_kind)) return bad('kind');
+      const G = b.p_groups; if (!Array.isArray(G) || G.length > 12) return bad('groups');
+      let total = 0; const out = [];
+      for (let gi = 0; gi < G.length; gi += 1) {
+        const g = G[gi]; const nm = String((g && g.name) || '').trim(); if (!nm || nm.length > 60 || /[<>]/.test(nm)) return bad('name');
+        const items = Array.isArray(g.items) ? g.items : []; if (items.length > 30) return bad('items');
+        const its = [];
+        for (let ii = 0; ii < items.length; ii += 1) {
+          const it = items[ii]; const t = String((it && it.title) || '').trim(); const x = String((it && it.text) || '').trim();
+          if (!t || t.length > 80 || /[<>]/.test(t)) return bad('title'); if (x.length > 1500 || /[<>]/.test(x)) return bad('text');
+          total += t.length + x.length; its.push({ id: it.id || 'i' + (gi + 1) + '_' + (ii + 1), title: t, text: x });
+        }
+        total += nm.length; out.push({ id: g.id || 'g' + (gi + 1), name: nm, items: its });
+      }
+      if (total > 20000) return bad('size');
+      H.agents[b.p_agent] = { ...(H.agents[b.p_agent] || {}), [b.p_kind]: out }; H.writes.push({ table: 'settings', op: 'agent_kb', agent: b.p_agent, kind: b.p_kind, sections: out.length });
+      return json(200, out);
+    }
+    if (name === 'mkt_trend_settings') return json(200, view || isAdmin(u) ? JSON.parse(JSON.stringify(H.trendCfg)) : { tags: [], sources: [], adTags: [] });
+    if (name === 'mkt_ad_tags_set') { // ش44
+      if (!isAdmin(u)) return refuse(403, '42501', 'admin only');
+      if (!Array.isArray(b.p_tags) || b.p_tags.length > 30) return bad('tags');
+      const T = []; for (const x of b.p_tags) { const t = String(x || '').trim().replace(/^#+/, '').replace(/\s+/g, ' '); if (!t || t.length > 40 || /[<>]/.test(t)) return bad('tags'); if (!T.includes(t)) T.push(t); }
+      H.trendCfg = { ...H.trendCfg, adTags: T }; H.writes.push({ table: 'settings', op: 'adTags', tags: T.length }); return json(200, T);
+    }
+    if (name === 'mkt_trend_settings_set') {
+      if (!isAdmin(u)) return refuse(403, '42501', 'admin only');
+      const T = []; const S = [];
+      if (!Array.isArray(b.p_tags) || b.p_tags.length > 30 || !Array.isArray(b.p_sources) || b.p_sources.length > 15) return bad('tags');
+      for (const x of b.p_tags) { const t = String(x || '').trim().replace(/^#+/, '').toLowerCase(); if (!/^[A-Za-z0-9_\u0621-\u064A\u0660-\u0669\u0671-\u06D3]{1,40}$/.test(t)) return bad('tags'); if (!T.includes(t)) T.push(t); }
+      for (const x of b.p_sources) { const t = String(x || '').trim().toLowerCase(); if (!/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/.test(t)) return bad('sources'); if (!S.includes(t)) S.push(t); }
+      H.trendCfg = { ...H.trendCfg, tags: T, sources: S }; H.writes.push({ table: 'settings', op: 'trends', tags: T.length, sources: S.length });
+      return json(200, { tags: T, sources: S });
+    }
+    if (name === 'mkt_buyer_rules') return view ? json(200, { ...H.rules }) : refuse(403, '42501', 'marketing.view is needed');
+    if (name === 'mkt_ads_orders') {
+      if (!view) return refuse(403, '42501', 'marketing.view is needed');
+      const a = c.body() || {}; if (!a.p_from || !a.p_to || a.p_to < a.p_from) return refuse(400, '22023', 'the range is from <= to, at most 400 days');
+      const money = isAdmin(u) || hasPerm(u, 'accounts.view') !== 'N';
+      return json(200, H.adOrders.filter((r) => r.day >= a.p_from && r.day <= a.p_to).map((r) => ({ ...r, share: money ? r.share : null })));
+    }
+    if (name === 'mkt_template_used') {
+      if (!create) return refuse(403, '42501', 'not allowed');
+      const t = H.templates.find((x) => x.id === b.p_id && !x.deleted_at); if (!t) return refuse(404, 'P0002', 'not found');
+      t.used += 1; return json(200, t.used);
+    }
+    if (name === 'mkt_schedule') {
+      if (!publish) return refuse(403, '42501', 'not allowed');
+      const camp = open(b.p_campaign); if (!camp) return refuse(404, 'P0002', 'not found');
+      const items = b.p_items; if (!Array.isArray(items) || !items.length || items.length > 100) return bad('items');
+      const keys = []; const plan = [];
+      for (const it of items) {
+        if (!it || typeof it !== 'object') return bad('items');
+        if (!/^[A-Z][0-9]{1,2}$/.test(String(it.piece || ''))) return bad('piece');
+        if (!KINDS.includes(it.kind)) return bad('kind');
+        const cap = lines(it.caption); if (cap.length > 2200) return bad('caption');
+        const tags = line(it.tags, 1000); if (tags.length > 300) return bad('tags');
+        const imgs = Array.isArray(it.images) ? it.images : []; if (imgs.length > 11 || imgs.some((p) => !new RegExp('^' + camp.id + '/[A-Za-z0-9._-]{1,120}$').test(String(p)))) return bad('images');
+        if (!PLATFORMS.includes(it.platform)) return bad('platform');
+        const d = String(it.day || ''); if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d < today || d > mktAddDays(today, 365)) return bad('day');
+        if (!HM.test(String(it.time || '')) || (d === today && it.time <= hm)) return bad('time');
+        const how = it.how == null ? 'download' : it.how; if (!['download', 'publish'].includes(how)) return bad('how');
+        if (how === 'publish') { // 0051
+          if (!['انستجرام', 'فيسبوك'].includes(it.platform) || !['بوست', 'كاروسيل', 'ستوري', 'ريل'].includes(it.kind)) return bad('how');
+          if (it.kind === 'ريل') { if (!imgs.length || !/\.mp4$/i.test(imgs[0])) return bad('images'); } // 9.5.5 (0054): the MP4 first
+          else {
+            if (!imgs.length || imgs.length > 10 || (it.kind === 'كاروسيل' ? imgs.length < 2 : imgs.length !== 1)) return bad('images');
+            if (it.platform === 'انستجرام' && imgs.some((x) => !/\.jpe?g$/i.test(x))) return bad('images');
+          }
+          if (it.platform === 'انستجرام' && it.kind !== 'ستوري' && cap.length + (tags ? tags.length + 2 : 0) > 2200) return bad('caption');
+        }
+        const k = it.piece + '|' + it.platform; if (keys.includes(k)) return bad('items'); keys.push(k);
+        plan.push({ piece: it.piece, kind: it.kind, name: line(it.name, 200) || it.kind, caption: cap, tags, images: imgs.slice(), platform: it.platform, day: d, time: it.time, how });
+      }
+      for (const p of plan) {
+        const ex = H.posts.find((x) => x.campaign_id === camp.id && x.piece === p.piece && x.platform === p.platform && x.status !== 'اتحذف');
+        if (ex) { if (['مجدول', 'فشل'].includes(ex.status)) Object.assign(ex, p, { caption_orig: p.caption, status: 'مجدول', updated_by: u.id, updated_at: now }); }
+        else { H.seq += 1; H.posts.push({ id: H.seq, campaign_id: camp.id, ...POST_9_5_2, ...p, caption_orig: p.caption, status: 'مجدول', was_live: false, post_url: null, published_at: null, published_by: null, deleted_at: null, deleted_by: null, created_by: u.id, created_at: now, updated_by: u.id, updated_at: now }); }
+      }
+      H.posts.filter((x) => x.campaign_id === camp.id && ['مجدول', 'فشل'].includes(x.status) && !keys.includes(x.piece + '|' + x.platform)).forEach((x) => Object.assign(x, { status: 'اتحذف', deleted_at: now, deleted_by: u.id, updated_at: now }));
+      Object.assign(camp, { scheduled_at: now, step: 4, updated_at: now, updated_by: u.id });
+      H.writes.push({ table: 'mkt_posts', op: 'schedule', campaign: camp.id, items: plan.length, publish: plan.filter((p) => p.how === 'publish').length, images: plan.filter((p) => p.how === 'publish').flatMap((p) => p.images) });
+      return json(200, H.posts.filter((x) => x.campaign_id === camp.id && ['مجدول', 'فشل'].includes(x.status)).length);
+    }
+    if (name === 'mkt_post_act') {
+      const a = b.p_args && typeof b.p_args === 'object' ? b.p_args : {};
+      if (!publish) return refuse(403, '42501', 'not allowed');
+      const x = H.posts.find((p) => p.id === Number(b.p_id)); if (!x) return refuse(404, 'P0002', 'not found');
+      const waiting = ['مجدول', 'فشل'].includes(x.status);
+      if (b.p_action === 'move') {
+        if (!waiting) return bad('status');
+        const d = String(a.day || ''); if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d < today || d > mktAddDays(today, 365)) return bad('day');
+        if (!HM.test(String(a.time || '')) || (d === today && a.time <= hm)) return bad('time');
+        if (d === x.day && a.time === x.time) return bad('same');
+        Object.assign(x, { day: d, time: a.time, status: 'مجدول', updated_by: u.id, updated_at: now }); H.writes.push({ table: 'mkt_posts', op: 'move', id: x.id, day: d, time: a.time }); return json(200, 'مجدول');
+      }
+      if (b.p_action === 'caption') {
+        if (!waiting) return bad('status'); const t = lines(a.text); if (t.length > 2200) return bad('caption');
+        Object.assign(x, { caption: t, updated_by: u.id, updated_at: now }); H.writes.push({ table: 'mkt_posts', op: 'caption', id: x.id }); return json(200, x.status);
+      }
+      if (b.p_action === 'published') {
+        if (!waiting) return bad('status'); const link = String(a.url || '').trim() || null;
+        if (link && (!/^https:\/\/[^\s<>"]+$/.test(link) || link.length > 500)) return bad('url');
+        Object.assign(x, { status: 'اتنشر', published_at: now, published_by: u.id, post_url: link, updated_by: u.id, updated_at: now }); H.writes.push({ table: 'mkt_posts', op: 'published', id: x.id }); return json(200, 'اتنشر');
+      }
+      if (b.p_action === 'delete') {
+        if (!(waiting || x.status === 'اتنشر')) return bad('status');
+        Object.assign(x, { was_live: x.status === 'اتنشر', status: 'اتحذف', deleted_at: now, deleted_by: u.id, updated_by: u.id, updated_at: now }); H.writes.push({ table: 'mkt_posts', op: 'delete', id: x.id }); return json(200, 'اتحذف');
+      }
+      return bad('action');
+    }
+    return refuse(404, 'PGRST202', 'Could not find the function public.' + name);
+  }
+
+  // ---------- the tables ----------
+  const t = rest[1]; const key = KEY[t];
+  const single = /vnd\.pgrst\.object\+json/.test(hd.accept || '');
+  const params = [...url.searchParams].filter(([k]) => !['select', 'order', 'limit', 'offset', 'on_conflict', 'columns'].includes(k));
+  const test = ([k, v]) => (v.startsWith('eq.') ? (r) => String(r[k]) === v.slice(3) : v.startsWith('gte.') ? (r) => String(r[k]) >= v.slice(4) : v.startsWith('lte.') ? (r) => String(r[k]) <= v.slice(4) : v === 'is.null' ? (r) => r[k] == null
+    : /^in\.\(.*\)$/.test(v) ? ((set) => (r) => set.includes(String(r[k])))(v.slice(4, -1).split(',').map((x) => x.replace(/^"(.*)"$/, '$1')))
+    : k === 'or' && /^\(.*\)$/.test(v) ? ((alts) => (alts.every((x) => x) ? (r) => alts.some((x) => x(r)) : null))(v.slice(1, -1).split(',').map((x) => { const m = /^([a-z_]+)\.(.+)$/.exec(x); return m ? test([m[1], m[2]]) : null; })) : null);
+  const fns = params.map(test); if (fns.some((x) => !x)) return refuse(400, 'PGRST100', 'mock: unsupported filter on ' + t + ': ' + params.map((p) => p.join('=')).join('&'));
+  const match = (r) => fns.every((x) => x(r));
+  const sel = String(url.searchParams.get('select') || '*').split(',').map((x) => x.trim()); const miss = sel.find((x) => x !== '*' && !COLS[t].includes(x));
+  if (miss) return refuse(400, '42703', 'column ' + t + '.' + miss + ' does not exist');
+  const pick = (r) => (sel.includes('*') ? { ...r } : Object.fromEntries(sel.map((x) => [x, r[x] === undefined ? null : r[x]])));
+  const answer = (list) => (single ? (list.length ? json(200, pick(list[0])) : refuse(406, 'PGRST116', 'no rows')) : json(200, list.map(pick)));
+  if (t === 'mkt_trends' || t === 'mkt_competitors' || t === 'site_checks') { // 0109
+    if (H.noSections) return refuse(404, 'PGRST205', "Could not find the table 'public." + t + "' in the schema cache");
+    if (method === 'GET') {
+      let list = view ? H[key].filter(match) : [];
+      const ords = String(url.searchParams.get('order') || '').split(',').filter(Boolean).map((o) => o.split('.'));
+      if (ords.length) list = list.slice().sort((a, b2) => { for (const [col, dir] of ords) { const d = (a[col] < b2[col] ? -1 : a[col] > b2[col] ? 1 : 0) * (dir === 'desc' ? -1 : 1); if (d) return d; } return 0; });
+      const lim = Number(url.searchParams.get('limit')); if (lim > 0) list = list.slice(0, lim);
+      return answer(list);
+    }
+    if (t === 'mkt_trends' || t === 'site_checks') return refuse(403, '42501', 'permission denied for table ' + t); // the server's rows
+    const b = c.body(); const ALLOW = method === 'POST' ? ['name', 'page_id', 'page_url', 'keyword', 'note'] : ['name', 'page_id', 'page_url', 'keyword', 'note', 'archived_at'];
+    if (Object.keys(b || {}).some((k) => !ALLOW.includes(k))) return refuse(403, '42501', 'permission denied for table mkt_competitors');
+    if (!create) return refuse(403, '42501', 'new row violates row-level security policy for table "mkt_competitors"');
+    const chk = (r) => (!String(r.name || '').trim() || String(r.name).trim().length > 80 || /[<>]/.test(r.name) ? 'mkt_competitors_name_check' : r.page_id != null && !/^[0-9]{5,20}$/.test(r.page_id) ? 'mkt_competitors_page_id_check'
+      : r.page_url != null && !/^https:\/\/([a-z0-9-]+\.)?(facebook|instagram)\.com\/[^\s<>"]{1,300}$/.test(r.page_url) ? 'mkt_competitors_page_url_check' : r.keyword != null && (String(r.keyword).length > 80 || /[<>]/.test(r.keyword)) ? 'mkt_competitors_keyword_check'
+      : r.note != null && (String(r.note).length > 300 || /[<>]/.test(r.note)) ? 'mkt_competitors_note_check' : null);
+    const violates = (name) => refuse(400, '23514', 'new row for relation "mkt_competitors" violates check constraint "' + name + '"');
+    if (method === 'POST') {
+      const row = { id: H.competitors.reduce((m, r) => Math.max(m, r.id), 0) + 1, name: b.name, page_id: b.page_id ?? null, page_url: b.page_url ?? null, keyword: b.keyword ?? null, note: b.note ?? null, created_by: u.id, created_at: now, updated_by: u.id, updated_at: now, archived_at: null };
+      const bad = chk(row); if (bad) return violates(bad);
+      H.competitors.push(row); H.writes.push({ table: t, op: 'insert', id: row.id, ...b }); return answer([row]);
+    }
+    if (method === 'PATCH') {
+      const rows = H.competitors.filter(match);
+      for (const r of rows) {
+        if (r.archived_at) return refuse(403, '42501', 'an archived competitor is not edited');
+        const next = { ...r, ...b }; const bad = chk(next); if (bad) return violates(bad);
+        Object.assign(r, b, b.archived_at ? { archived_at: now } : {}, { updated_by: u.id, updated_at: now }); H.writes.push({ table: t, op: b.archived_at ? 'archive' : 'update', id: r.id, ...b });
+      }
+      return answer(rows);
+    }
+    return refuse(403, '42501', 'permission denied for table mkt_competitors');
+  }
+  if (t === 'mkt_agent_chats' || t === 'mkt_agent_messages') {
+    const own = (r) => r.member_id === u.id && !r.deleted_at;
+    const vis = t === 'mkt_agent_chats' ? (r) => own(r) && agentCan(u, r.agent) : (r) => H.agentChats.some((ch) => ch.id === r.chat_id && own(ch) && agentCan(u, ch.agent));
+    if (method === 'GET') {
+      let list = H[key].filter((r) => vis(r) && match(r));
+      const ord = url.searchParams.get('order'); if (ord) { const [col, dir] = ord.split('.'); list = list.slice().sort((a, b2) => (a[col] < b2[col] ? -1 : a[col] > b2[col] ? 1 : 0) * (dir === 'desc' ? -1 : 1)); }
+      const lim = Number(url.searchParams.get('limit')); if (lim > 0) list = list.slice(0, lim);
+      return answer(list);
+    }
+    const b = c.body();
+    if (method === 'PATCH' && t === 'mkt_agent_chats') {
+      if (Object.keys(b || {}).some((k) => k !== 'title')) return refuse(403, '42501', 'permission denied for table mkt_agent_chats');
+      const title = String(b.title == null ? '' : b.title).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 80); if (!title) return refuse(400, '22023', 'invalid: title');
+      const rows = H.agentChats.filter((r) => vis(r) && match(r)); for (const r of rows) { r.title = title; H.writes.push({ table: t, op: 'rename', id: r.id }); }
+      return answer(rows);
+    }
+    return refuse(403, '42501', 'permission denied for table ' + t);
+  }
+  if (method === 'GET') {
+    if (!view) return json(200, []);
+    let list = H[key].filter(match);
+    const ord = url.searchParams.get('order'); if (ord) { const [col, dir] = ord.split('.'); list = list.slice().sort((a, b2) => (a[col] < b2[col] ? -1 : a[col] > b2[col] ? 1 : 0) * (dir === 'desc' ? -1 : 1)); }
+    const lim = Number(url.searchParams.get('limit')); if (lim > 0) list = list.slice(0, lim);
+    return answer(list);
+  }
+  if (H.down) return json(503, { message: 'mock: marketing down' });
+  if (t === 'mkt_posts' || t === 'mkt_ad_objects' || t === 'mkt_ad_stats' || t === 'mkt_suggestions' || t === 'mkt_video_jobs') return refuse(403, '42501', 'permission denied for table ' + t);
+  if (t === 'mkt_requests') return mktRequests(c, method, [].concat(c.body()), match, answer, refuse);
+  const b = c.body(); const list = [].concat(b);
+  const g = GRANT[t];
+  if (method === 'POST') {
+    if (list.some((r) => Object.keys(r || {}).some((k) => !g.insert.includes(k)))) return refuse(403, '42501', 'permission denied for table ' + t);
+    if (!create) return refuse(403, '42501', 'new row violates row-level security policy for table "' + t + '"');
+    const made = [];
+    for (const r of list) {
+      if (t === 'mkt_campaigns') {
+        if (r.goal != null && !GOALS.includes(r.goal)) return refuse(400, '23514', 'mkt_campaigns_goal_check');
+        if (r.step != null && !(r.step >= 1 && r.step <= 4)) return refuse(400, '23514', 'mkt_campaigns_step_check');
+        H.ncamp += 1; const rec = { id: MKT_ID(H.ncamp), name: r.name || 'كامبين من غير اسم', goal: r.goal || null, step: r.step || 1, state: r.state || {}, scheduled_at: null, created_by: u.id, created_at: now, updated_by: u.id, updated_at: now, archived_at: null, archived_by: null };
+        H.campaigns.push(rec); made.push(rec);
+      } else {
+        if (!['post', 'carousel', 'video'].includes(r.kind)) return refuse(400, '23514', 'mkt_templates_kind_check');
+        if (r.image != null && !/^templates\/[A-Za-z0-9._-]{1,120}$/.test(r.image)) return refuse(400, '23514', 'mkt_templates_image_check');
+        H.ntpl += 1; const rec = { id: MKT_TPL(H.ntpl), name: r.name, kind: r.kind, image: r.image || null, descr: r.descr || '', used: 0, created_by: u.id, created_at: now, updated_by: u.id, updated_at: now, deleted_at: null, deleted_by: null };
+        H.templates.push(rec); made.push(rec);
+      }
+      H.writes.push({ table: t, op: 'insert', ...r });
+    }
+    return single ? json(201, pick(made[0])) : json(201, made.map(pick));
+  }
+  if (method === 'PATCH') {
+    if (Object.keys(b || {}).some((k) => !g.update.includes(k))) return refuse(403, '42501', 'permission denied for table ' + t);
+    if (!create) return json(200, []);
+    const rows = H[key].filter((r) => match(r) && !(t === 'mkt_campaigns' ? r.archived_at : r.deleted_at));
+    for (const r of rows) {
+      if (t === 'mkt_campaigns' && b.step != null && !(b.step >= 1 && b.step <= 4)) return refuse(400, '23514', 'mkt_campaigns_step_check');
+      Object.assign(r, b, { updated_by: u.id, updated_at: now });
+      if (t === 'mkt_campaigns' && b.archived_at) Object.assign(r, { archived_at: now, archived_by: u.id });
+      if (t === 'mkt_templates' && b.deleted_at) Object.assign(r, { deleted_at: now, deleted_by: u.id });
+      H.writes.push({ table: t, op: 'update', id: r.id, ...Object.fromEntries(Object.keys(b).map((k) => [k, k === 'state' ? '…' : b[k]])) });
+    }
+    return answer(rows);
+  }
+  return refuse(405, '42501', 'method not allowed');
+}
+
+// the AI actions of the marketing page, with the server's own checks (_shared/marketing.js): ai-images campaign / campaign_edit
+// (marketing.create F or the admin; the piece read from the campaign as saved; the month's cap → 402; a 1×1 PNG in the bucket) and
+// ai-content marketing (fill from the saved piece, rewrite, describe — the answer H.aiAnswer(req, target) or the default below,
+// cleaned by the server's own cleanMarketing). H.imgFail / H.aiFail = 'ai_cap' | 'busy' | 'not_configured' | 'ai_error' | 'refused'.
+function mktAi(c, b) {
+  const { u, json, hasPerm, isAdmin, mock } = c; const H = mock.mkt;
+  const agentCan = agentCanOf(H, isAdmin, hasPerm);
+  H.calls.push({ fn: b.action === 'marketing' || b.action === 'buyer' || b.action === 'agent' ? 'ai-content' : 'ai-images', action: b.action, task: b.task || null, by: u ? u.id : null, piece: b.piece || null, slide: b.slide == null ? null : b.slide, scene: b.scene == null ? null : b.scene, kind: b.kind || null, model: b.model || null, pins: Array.isArray(b.pins) ? b.pins.length : 0, notes: b.notes || null });
+  if (b.action === 'trends') { // 0109 (comments decision 69): marketing.create or the admin; the rows a search page stands behind are stored
+    if (!u || !(isAdmin(u) || hasPerm(u, 'marketing.create') === 'F')) return json(401, { error: 'unauthorized' });
+    const p = parseTrends(b); if ('error' in p) return json(400, p);
+    H.calls[H.calls.length - 1].fn = 'ai-content'; H.calls[H.calls.length - 1].focus = p.req.focus;
+    if (H.noSections) return json(503, { error: 'not_ready' });
+    if (H.trendsFail) return H.trendsFail === 'refused' ? json(200, { result: 'refused', model: 'mock' }) : H.trendsFail === 'no_search' ? json(502, { error: 'no_search', code: 'unavailable' })
+      : json(H.trendsFail === 'ai_cap' ? 402 : H.trendsFail === 'busy' ? 429 : H.trendsFail === 'not_configured' ? 503 : 502, { error: H.trendsFail });
+    const tags = H.trendCfg.tags; // ش39: with the tags the posts themselves (the mock's TikTok and Facebook pages), each once
+    const results = H.trendsResults || (tags.length ? TREND_PAGES.concat(TREND_POSTS) : TREND_PAGES);
+    const rows = cleanTrends(H.trendsAnswer ? H.trendsAnswer(p.req) : tags.length ? TREND_POST_ROWS(tags).concat(TREND_ROWS.slice(0, 2)) : TREND_ROWS, results, tags)
+      .filter((r) => !r.external_id || !H.trends.some((x) => x.platform === r.platform && x.external_id === r.external_id));
+    if (!rows.length) return json(502, { error: 'ai_error' });
+    H.seq += 1; const batch = 'b0000000-0000-4000-8000-' + String(H.seq).padStart(12, '0'); const at = new Date().toISOString(); let id = H.trends.reduce((m, r) => Math.max(m, r.id), 0);
+    for (const r of rows) { id += 1; H.trends.push({ id, batch, likes: null, comments: null, posted_at: null, thumb: null, ...r, found_at: at, created_by: u.id }); }
+    return json(200, { result: 'ok', count: rows.length, batch, tags: tags.length, model: 'claude-opus-5-5', cost_usd: 0.09, run_id: H.seq });
+  }
+  if (b.action === 'trend_thumbs') { // ش39: the newest rows without a picture get one (a 1px image in the bucket)
+    if (!u || !(isAdmin(u) || hasPerm(u, 'marketing.create') === 'F')) return json(401, { error: 'unauthorized' });
+    const L = H.trends.filter((r) => !r.thumb && !r.noPic && (r.thumb_tries || 0) < 2).slice(0, 12); let done = 0;
+    for (const r of L) { r.thumb_tries = (r.thumb_tries || 0) + 1; const pth = 'trends/' + String(r.found_at).slice(0, 7) + '/' + r.id + '.jpg'; H.objects.set(pth, { type: 'image/jpeg', size: 1 }); r.thumb = pth; done += 1; }
+    return json(200, { result: 'ok', done, tried: L.length });
+  }
+  if (b.action === 'buyer') { // the buyer's chat: marketing.view (P too); the numbers come from the server, the answer is text only
+    if (!u || !(isAdmin(u) || hasPerm(u, 'marketing.view') !== 'N')) return json(401, { error: 'unauthorized' });
+    const p = parseBuyer(b); if ('error' in p) return json(400, p);
+    if (H.buyerFail) return H.buyerFail === 'refused' ? json(200, { result: 'refused', model: 'mock' }) : json(H.buyerFail === 'ai_cap' ? 402 : H.buyerFail === 'busy' ? 429 : H.buyerFail === 'not_configured' ? 503 : 502, { error: H.buyerFail });
+    const answer = H.buyerAnswer ? H.buyerAnswer(p.req) : { text: 'سؤالك: ' + p.req.question + '\nالأرقام من آخر 7 أيام على ' + H.adObjects.filter((o) => o.kind === 'campaign').length + ' حملة. أنا ببص بس — التنفيذ من الاقتراحات بموافقتك.' };
+    H.seq += 1; return json(200, { result: 'ok', ...cleanBuyer(answer), model: 'claude-opus-5-5', cost_usd: 0.003, run_id: H.seq });
+  }
+  if (b.action === 'agent') { // 0084: a member's chat — their own, the history from the table, the turns written here after the answer
+    const p = parseAgent(b); if ('error' in p) return json(400, p);
+    // 0120: the registry — an unknown or archived one 404, one the member does not see 401 (before 0120: the three by marketing.view)
+    if (!u) return json(401, { error: 'unauthorized' });
+    if (H.noRegistry) { if (!['buyer', 'designer', 'dev'].includes(p.req.agent)) return json(404, { error: 'not_found' }); if (!(isAdmin(u) || hasPerm(u, 'marketing.view') !== 'N')) return json(401, { error: 'unauthorized' }); }
+    else { const reg = H.aiAgents.find((a) => a.id === p.req.agent && !a.archived_at); if (!reg) return json(404, { error: 'not_found' }); if (!agentCan(u, reg.id)) return json(401, { error: 'unauthorized' }); }
+    let chat = null;
+    if (p.req.chatId) { chat = H.agentChats.find((x) => x.id === p.req.chatId) || null; if (!chat || chat.member_id !== u.id || chat.deleted_at || chat.agent !== p.req.agent) return json(404, { error: 'not_found' }); }
+    const hist = chat ? H.agentMsgs.filter((m) => m.chat_id === chat.id) : [];
+    H.calls[H.calls.length - 1].agent = p.req.agent; H.calls[H.calls.length - 1].history = hist.length; H.calls[H.calls.length - 1].chat = chat ? chat.id : null;
+    if (H.agentFail) return H.agentFail === 'refused' ? json(200, { result: 'refused', model: 'mock' }) : json(H.agentFail === 'ai_cap' ? 402 : H.agentFail === 'busy' ? 429 : H.agentFail === 'not_configured' ? 503 : 502, { error: H.agentFail });
+    const cfg = H.agents[p.req.agent] || {};
+    const raw = H.agentAnswer ? H.agentAnswer(p.req, cfg) : { text: 'سؤالك: ' + p.req.question + (p.req.agent === 'buyer' ? '\nالأرقام من آخر 7 أيام على ' + H.adObjects.filter((o) => o.kind === 'campaign').length + ' حملة. أنا ببص بس — التنفيذ من الاقتراحات بموافقتك.' : '') + (hist.length ? '\n(فاكر ' + hist.length + ' رسالة قبل كده)' : ''),
+      image_prompt: p.req.agent === 'designer' && /صورة/.test(p.req.question) ? 'A cozy winter flat lay of handmade macrame on beige linen, warm light' : '',
+      // owner batch 14 Nov decision 14: a job for a person comes back as a ready request
+      request: /صفحة هبوط/.test(p.req.question) ? { title: 'صفحة هبوط لعروض الشتا', details: 'صفحة على الموقع فيها بانر العروض و12 منتج من قسم الشتا وزرار «اشتري دلوقتي».' } : { title: '', details: '' } };
+    // the owner 17 Nov: the handoff goes only to an assistant of the member's team (what they see of the registry), never to itself
+    const team = H.noRegistry ? (isAdmin(u) || hasPerm(u, 'marketing.view') !== 'N' ? ['buyer', 'designer', 'dev'] : []) : H.aiAgents.filter((a) => !a.archived_at && agentCan(u, a.id)).map((a) => a.id);
+    H.calls[H.calls.length - 1].team = team.filter((x) => x !== p.req.agent);
+    const out = cleanAgent(raw, p.req.agent, H.calls[H.calls.length - 1].team); const now = new Date().toISOString();
+    if (!chat) { H.nchat += 1; chat = { id: 'c0000000-0000-4000-8000-' + String(H.nchat).padStart(12, '0'), member_id: u.id, agent: p.req.agent, title: agentTitle(p.req.question), created_at: now, updated_at: now, deleted_at: null }; H.agentChats.push(chat); }
+    else chat.updated_at = now;
+    const mk = (role, text) => { const id = H.agentMsgs.reduce((m, x) => Math.max(m, x.id), 0) + 1; const r = { id, chat_id: chat.id, role, text, images: [], run_id: null, created_at: now }; H.agentMsgs.push(r); return r; };
+    const turns = [mk('user', p.req.question), mk('assistant', out.text)];
+    H.seq += 1; return json(200, { result: 'ok', ...out, chat: { id: chat.id, agent: chat.agent, title: chat.title, updated_at: now }, turns: turns.map((x) => ({ id: x.id, role: x.role, text: x.text, images: x.images, created_at: x.created_at })), model: 'claude-opus-5-5', cost_usd: 0.004, run_id: H.seq });
+  }
+  if (!u || !(isAdmin(u) || hasPerm(u, 'marketing.create') === 'F')) return json(401, { error: 'unauthorized' });
+  const failWith = (k) => (k === 'refused' ? json(200, { result: 'refused', model: 'mock' }) : json(k === 'ai_cap' ? 402 : k === 'busy' ? 429 : k === 'not_configured' ? 503 : 502, { error: k, configured: k === 'not_configured' ? false : undefined }));
+  const campaign = (id) => H.campaigns.find((x) => x.id === id && !x.archived_at) || null;
+  if (b.action === 'agent_image') { // 0084 decision 6: the designer chat's picture — the image credits, agents/<member>/<chat>/, the assistant's turn
+    const p = parseAgentImage(b); if ('error' in p) return json(400, p);
+    const chat = H.agentChats.find((x) => x.id === p.req.chatId);
+    if (!chat || chat.member_id !== u.id || chat.agent !== 'designer' || chat.deleted_at) return json(404, { error: 'not_found' });
+    if (H.agentImgFail) return failWith(H.agentImgFail);
+    const credits = creditsFor(p.req.model, 1);
+    if (H.cap != null && H.used + credits > H.cap) return json(402, { error: 'ai_cap' });
+    H.used += credits; H.seq += 1; const now = new Date().toISOString();
+    const path = agentImagePath(u.id, chat.id, String(H.seq), 'png'); H.objects.set(path, { type: 'image/png', size: 68, by: u.id });
+    const id = H.agentMsgs.reduce((m, x) => Math.max(m, x.id), 0) + 1; const turn = { id, chat_id: chat.id, role: 'assistant', text: '', images: [path], run_id: H.seq, created_at: now };
+    H.agentMsgs.push(turn); chat.updated_at = now;
+    return json(200, { result: 'ok', bucket: 'marketing', path, paths: [path], credits, model: p.req.model, run_id: H.seq, turn: { id, role: 'assistant', text: '', images: [path], created_at: now } });
+  }
+  if (b.action === 'marketing') {
+    const p = parseMarketing(b); if ('error' in p) return json(400, p);
+    if (p.req.task === 'scenes') { // 9.5.5 decision 59: the video piece's scenes (the durations from the piece and its model) — before the image target (the function's order)
+      const camp = campaign(p.req.campaignId); if (!camp) return json(404, { error: 'not_found' });
+      const vp = (camp.state.pieces || []).find((x) => x && x.id === p.req.piece && x.kind === 'فيديو');
+      if (!vp) return json(400, { error: 'bad_request', field: 'piece' });
+      if (H.aiFail) return failWith(H.aiFail);
+      const n = Number.isInteger(vp.sceneCount) ? vp.sceneCount : 3;
+      const raw = H.scenesAnswer ? H.scenesAnswer(vp) : { scenes: Array.from({ length: n }, (_, i) => ({ idea: ['لقطة قريبة على نقشة المنتج', 'إيد الصانعة وهي بتشتغل', 'القعدة كاملة بنور العصاري', 'تفاصيل الخامة', 'اللوجو على خلفية كريم'][i % 5], text: ['دفا الشتا', 'مشغولة يدويًا', '', 'Art craft', 'ibtekr.club'][i % 5], cam: ['زوم بطيء', 'ثابتة', 'تحريك يمين', 'ماكرو', 'ثابتة'][i % 5] })), voice: p.req.voice ? 'الدفا الحقيقي من إيد صانعة مصرية — اطلب قطعتك من إبتكر.' : '' };
+      H.seq += 1; return json(200, { result: 'ok', ...cleanScenes(raw, { n, dur: Number(vp.dur) || 15, model: vp.model }), model: 'claude-opus-5-5', cost_usd: 0.004, run_id: H.seq });
+    }
+    let target = null;
+    if (p.req.campaignId) {
+      const camp = campaign(p.req.campaignId); if (!camp) return json(404, { error: 'not_found' });
+      if (p.req.piece) { target = campaignTarget(camp.state, p.req.piece, p.req.slide, { text: true }); if (!target) return json(400, { error: 'bad_request', field: 'piece' }); } // the writing's target, as the function asks: a video piece is itself
+    }
+    if (H.aiFail) return failWith(H.aiFail);
+    const answer = H.aiAnswer ? H.aiAnswer(p.req, target) : p.req.task === 'fill'
+      ? { idea: 'لقطة لـ ' + (target ? target.label : 'القطعة') + ' في قعدة دافية', caption: 'كولكشن جديد وصل إبتكر ✨ مشغول يدويًا في مصر', title: 'دفا الشتا', sub: 'مشغولة يدويًا', badge: 'جديد',
+        slides: Array.from({ length: target ? target.slides : 0 }, (_, i) => ({ idea: 'تفصيلة ' + (i + 1), title: 'شريحة ' + (i + 1), sub: '' })) }
+      : p.req.task === 'describe' ? { text: 'المنتج في النص على خلفية كريمي، والعنوان فوق بالأخضر، وبادج صغير في الركن.' }
+      : { text: ({ title: 'دفا الشتا بإيد مصرية', sub: 'كولكشن الشتا وصل', badge: 'جديد', caption: 'الدفا الحقيقي من إيد صانعة مصرية 🧶\nاطلب قطعتك من إبتكر' })[p.req.kind] || 'كلام جديد مكتوب بالـ AI' };
+    H.seq += 1; return json(200, { result: 'ok', ...cleanMarketing(answer, p.req, target), model: 'claude-opus-5-5', cost_usd: 0.004, run_id: H.seq });
+  }
+  if (/^video_/.test(String(b.action))) return mktVideo(c, b, campaign);
+  // comments decision 52: the campaign's images on Magnific as ai-images answers — bridge_campaign (marketing.create F or the
+  // admin; the linked account of the base mock, mock.magnific.linked; every image of the saved campaign a generator → H.mgFlows) and
+  // bridge_campaign_fetch (the recorded flow's results: H.mgResults[campaign] = { key: [ids] } when a spec sets it, else one new
+  // result for every image the first time — as if the member ran the generators —; the newest new one of each → a file in the
+  // campaign's folder and { placed }). H.mgFail = 'busy' | 'mcp_error' answers the next call with that.
+  if (b.action === 'bridge_campaign' || b.action === 'bridge_campaign_fetch') {
+    if (!u || !(isAdmin(u) || hasPerm(u, 'marketing.create') === 'F')) return json(401, { error: 'unauthorized' });
+    const camp = typeof b.campaign_id === 'string' ? campaign(b.campaign_id) : null; if (!camp) return json(404, { error: 'not_found' });
+    const M = mock.magnific || { linked: false }; H.mgFlows = H.mgFlows || {};
+    const targets = campaignTargets(camp.state);
+    if (b.action === 'bridge_campaign') {
+      if (!targets.length) return json(409, { error: 'nothing' });
+      if (!M.linked) return json(503, { error: 'not_linked', status: null, detail: null });
+      if (H.mgFail) { const f = H.mgFail; H.mgFail = null; return json(f === 'busy' ? 429 : 502, { error: f }); }
+      if (!M.space) M.space = { id: 'a3000000-0000-4000-8000-000000000001', url: 'https://www.magnific.com/app/spaces/a3000000-0000-4000-8000-000000000001', name: 'استوديو ابتكر' };
+      const past = H.mgFlows[camp.id] || { sent: [] }; const refs = new Set();
+      targets.forEach((w) => { const t = campaignTarget(camp.state, w.piece, w.slide); if (!t) return; const r = campaignRefs(t, camp.id); r.use.concat(r.style).forEach((x) => refs.add(JSON.stringify(x))); });
+      const fresh = [...refs].filter((k) => !past.sent.includes(k));
+      H.mgFlows[camp.id] = { keys: targets.map((w) => flowKey(w.piece, w.slide)), seen: [], sent: past.sent.concat(fresh), n: (past.n || 0) + 1 };
+      H.calls[H.calls.length - 1].targets = targets.length;
+      return json(200, { result: 'ok', campaign_id: camp.id, url: M.space.url, space_id: M.space.id, page_id: 'page-mkt', targets: targets.length, refs: refs.size, uploaded: fresh.length, left: 0 });
+    }
+    const flow = H.mgFlows[camp.id]; if (!flow) return json(409, { error: 'no_flow' });
+    if (!M.linked) return json(503, { error: 'not_linked', status: null, detail: null });
+    if (H.mgFail) { const f = H.mgFail; H.mgFail = null; return json(f === 'busy' ? 429 : 502, { error: f }); }
+    const outs = (H.mgResults && H.mgResults[camp.id]) || Object.fromEntries(flow.keys.map((k) => [k, ['MG' + flow.n + '-' + k]]));
+    const placed = []; let found = 0;
+    targets.forEach((w) => { const key = flowKey(w.piece, w.slide); if (!flow.keys.includes(key)) return;
+      const ids = (outs[key] || []).filter((id) => !flow.seen.includes(id)); if (!ids.length) return; found += 1;
+      H.seq += 1; const path = campaignGenPath(camp.id, w.piece, w.slide, 'mgmk' + H.seq, 'png', false);
+      H.objects.set(path, { type: 'image/png', size: 68, by: u.id }); ids.forEach((id) => flow.seen.push(id)); placed.push({ piece: w.piece, slide: w.slide, path }); });
+    placed.forEach((x) => { camp.state = placeImage(camp.state, x.piece, x.slide, x.path) || camp.state; }); // the server puts them on the saved campaign too
+    return json(200, { result: 'ok', campaign_id: camp.id, found, placed, failed: 0, offhost: 0 });
+  }
+  // the owner 15 Nov: any link — the server's rules (refUrl), then H.refWeb[url] = 'image' | 'page' (its og:image) | 'none' | 'big';
+  // unknown = an image; the image kept as <campaign>/ref-mkN.jpg (the bytes are the server's business, not the page's)
+  if (b.action === 'ref_link') {
+    if (!u || !(isAdmin(u) || hasPerm(u, 'marketing.create') === 'F')) return json(401, { error: 'unauthorized' });
+    const camp = typeof b.campaign_id === 'string' ? campaign(b.campaign_id) : null;
+    const url = refUrl(b.url); if (!url) return json(400, { error: 'bad_request', field: 'url' }); if (!camp) return json(404, { error: 'not_found' });
+    const kind = (H.refWeb || {})[url.href] || 'image';
+    if (kind === 'none') return json(422, { error: 'not_image' }); if (kind === 'big') return json(413, { error: 'too_big' }); if (kind === 'blocked') return json(403, { error: 'blocked' });
+    H.seq += 1; const path = camp.id + '/ref-mk' + H.seq + '.jpg'; H.objects.set(path, { type: 'image/jpeg', size: 68, by: u.id });
+    H.calls[H.calls.length - 1].url = url.href;
+    return json(200, { result: 'ok', path, name: refName(url) });
+  }
+  const parsed = b.action === 'campaign' ? parseCampaign(b) : parseCampaignEdit(b); if ('error' in parsed) return json(400, parsed);
+  const req = parsed.req; const camp = campaign(req.campaignId); if (!camp) return json(404, { error: 'not_found' });
+  const t = campaignTarget(camp.state, req.piece, req.slide); if (!t) return json(400, { error: 'bad_request', field: 'piece' });
+  const edit = b.action === 'campaign_edit';
+  if (edit && !campaignPathOk(camp.id, t.target.img)) return json(400, { error: 'bad_request', field: 'image' });
+  const credits = creditsFor(req.model, 1);
+  if (H.cap != null && H.used + credits > H.cap) return json(402, { error: 'ai_cap' });
+  if (H.imgFail) return failWith(H.imgFail);
+  H.seq += 1; const path = campaignGenPath(camp.id, req.piece, req.slide, 'mk' + H.seq, 'png', edit);
+  H.objects.set(path, { type: 'image/png', size: 68, by: u.id }); H.used += credits;
+  return json(200, { result: 'ok', bucket: 'marketing', path, paths: [path], credits, model: req.model, run_id: H.seq });
+}
+
+// 9.5.2: mkt-publish as the page sees it — status (marketing.view), autopublish (the admin), publish_now (marketing.publish F, the
+// switch on, a waiting / failed system row → «اتنشر» with a platform id and link, its day and hour now; H.pubFail → 502 + «فشل»),
+// delete (a live row with its platform id → «اتحذف» was_live; H.delFail → 502, the row stays live)
+function mktPublish(c, b) {
+  const { u, hasPerm, isAdmin, json, mock } = c; const H = mock.mkt;
+  H.calls.push({ fn: 'mkt-publish', action: b.action || null, by: u ? u.id : null, id: b.id == null ? null : b.id, on: b.on == null ? null : b.on });
+  if (!u) return json(401, { error: 'unauthorized' });
+  const admin = isAdmin(u); const view = admin || hasPerm(u, 'marketing.view') !== 'N'; const publish = admin || hasPerm(u, 'marketing.publish') === 'F';
+  const now = new Date().toISOString(); const { day, hm } = cairo();
+  if (b.action === 'status') return view ? json(200, { result: 'ok', ...JSON.parse(JSON.stringify(H.conn)) }) : json(401, { error: 'unauthorized' });
+  if (b.action === 'trends_ig') { // ش39: Instagram's hashtag search (the linked account) — the tags' top posts, each once
+    if (!(admin || hasPerm(u, 'marketing.create') === 'F')) return json(401, { error: 'unauthorized' });
+    const tags = H.trendCfg.tags; if (!tags.length) return json(200, { result: 'no_tags', count: 0 });
+    if (H.igOff) return json(200, H.igOff === 'not_linked' ? { result: 'not_linked', count: 0 } : { result: 'unavailable', code: H.igOff, count: 0 });
+    H.seq += 1; const batch = 'b0000000-0000-4000-8000-' + String(H.seq).padStart(12, '0'); let id = H.trends.reduce((m, r) => Math.max(m, r.id), 0); let count = 0;
+    tags.slice(0, 3).forEach((t, i) => [0, 1].forEach((k) => {
+      const code = 'IG' + t.replace(/[^A-Za-z0-9]/g, '').slice(0, 6) + i + k + 'x'; if (H.trends.some((x) => x.platform === 'instagram' && x.external_id === code)) return;
+      id += 1; count += 1;
+      H.trends.push({ id, batch, title: (k ? 'ريل ' : 'بوست ') + '#' + t, summary: 'من أعلى بوستات الهاشتاج دلوقتي', source: 'Instagram', url: 'https://www.instagram.com/' + (k ? 'reel' : 'p') + '/' + code + '/', kind: k ? 'video' : 'image',
+        platform: 'instagram', tag: t, thumb: null, author: null, views: null, likes: 1200 - i * 100 - k * 50, comments: 30, posted_at: now, external_id: code, found_at: now, created_by: u.id });
+    }));
+    return json(200, { result: 'ok', count, found: count, skipped: [] });
+  }
+  if (b.action === 'autopublish') {
+    if (!admin) return json(401, { error: 'unauthorized' }); if (typeof b.on !== 'boolean') return json(400, { error: 'bad_request', field: 'on' });
+    H.conn.autopublish = b.on; H.writes.push({ table: 'settings', op: 'autopublish', on: b.on }); return json(200, { result: 'ok', autopublish: b.on });
+  }
+  if (!publish) return json(401, { error: 'unauthorized' });
+  const x = H.posts.find((p) => p.id === Number(b.id)); if (!x) return json(404, { error: 'not_found' });
+  if (b.action === 'publish_now') {
+    if (!H.conn.autopublish) return json(409, { error: 'off' });
+    if (x.src !== 'system' || !['مجدول', 'فشل'].includes(x.status)) return json(409, { error: 'status' });
+    if (H.pubFail) { Object.assign(x, { status: 'فشل', error: H.pubFail, day, time: hm, updated_at: now }); H.writes.push({ table: 'mkt_posts', op: 'publish_now', id: x.id, error: H.pubFail }); return json(502, { error: H.pubFail }); }
+    const ig = x.platform === 'انستجرام'; const ext = ig ? '1789' + x.id : '111_9' + x.id;
+    const link = ig ? 'https://www.instagram.com/p/mk' + x.id + '/' : 'https://www.facebook.com/111/posts/9' + x.id;
+    Object.assign(x, { status: 'اتنشر', how: 'publish', external_id: ext, post_url: link, published_at: now, error: null, claimed_at: null, day, time: hm, updated_at: now });
+    H.writes.push({ table: 'mkt_posts', op: 'publish_now', id: x.id }); return json(200, { result: 'ok', status: 'اتنشر', url: link });
+  }
+  if (b.action === 'delete') {
+    if (x.status !== 'اتنشر' || !x.external_id) return json(409, { error: 'status' });
+    if (H.delFail) return json(502, { error: H.delFail });
+    Object.assign(x, { status: 'اتحذف', was_live: true, deleted_at: now, deleted_by: u.id, updated_at: now });
+    H.writes.push({ table: 'mkt_posts', op: 'delete_live', id: x.id }); return json(200, { result: 'ok', status: 'اتحذف' });
+  }
+  return json(400, { error: 'unknown_action' });
+}
+
+// 9.5.4: mkt_requests as 0053's policies and guard see them — insert with marketing.create (the author and «جديد» from the server),
+// the status by the admin only (done_at follows «خلص»), the text by the admin or its author while «جديد»
+function mktRequests(c, method, list, match, answer, refuse) {
+  const { u, hasPerm, isAdmin, mock } = c; const H = mock.mkt; const now = new Date().toISOString();
+  const admin = isAdmin(u); const create = hasPerm(u, 'marketing.create') === 'F'; const g = GRANT.mkt_requests;
+  if (method === 'POST') {
+    if (list.some((r) => Object.keys(r || {}).some((k) => !g.insert.includes(k)))) return refuse(403, '42501', 'permission denied for table mkt_requests');
+    if (!create) return refuse(403, '42501', 'new row violates row-level security policy for table "mkt_requests"');
+    const made = [];
+    for (const r of list) {
+      if (!['designer', 'dev'].includes(r.kind) || !line(r.title, 160) || line(r.title, 161).length > 160) return refuse(400, '23514', 'new row for relation "mkt_requests" violates check constraint');
+      const row = { id: H.requests.reduce((m, x) => Math.max(m, x.id), 0) + 1, kind: r.kind, title: line(r.title, 160), details: r.details == null ? null : lines(r.details).slice(0, 2000), project: r.project == null ? null : line(r.project, 60),
+        status: 'جديد', created_by: u.id, created_at: now, updated_by: u.id, updated_at: now, done_at: null };
+      H.requests.push(row); made.push(row); H.writes.push({ table: 'mkt_requests', op: 'insert', id: row.id, kind: row.kind });
+    }
+    return answer(made);
+  }
+  if (method === 'PATCH') {
+    const b = list[0] || {};
+    if (Object.keys(b).some((k) => !g.update.includes(k))) return refuse(403, '42501', 'permission denied for table mkt_requests');
+    const rows = H.requests.filter(match).filter((r) => admin || (r.created_by === u.id && create));
+    for (const r of rows) {
+      if (b.status !== undefined && b.status !== r.status && !admin) return refuse(403, '42501', 'the admin changes a request status');
+      if (b.status !== undefined && !REQ_STATUS.includes(b.status)) return refuse(400, '23514', 'check constraint');
+      const text = ['title', 'details', 'project'].some((k) => b[k] !== undefined && b[k] !== r[k]);
+      if (text && !(admin || (r.created_by === u.id && r.status === 'جديد'))) return refuse(403, '42501', 'the author edits a new request only');
+      if (b.title !== undefined && !line(b.title, 160)) return refuse(400, '23514', 'check constraint');
+      Object.assign(r, b, { updated_by: u.id, updated_at: now });
+      if (b.status !== undefined) r.done_at = b.status === 'خلص' ? (r.done_at || now) : null;
+      H.writes.push({ table: 'mkt_requests', op: 'update', id: r.id, ...Object.fromEntries(Object.keys(b).map((k) => [k, k === 'status' ? b[k] : '…'])) });
+    }
+    return answer(rows);
+  }
+  return refuse(405, '42501', 'method not allowed');
+}
+
+// 9.5.3: mkt-ads — status (marketing.view) and the admin's sync by hand; the knob adsFail answers a sync with our code (502).
+// 9.5.6: the status carries platforms { meta, tiktok, google } (Meta's from H.ads, the others from H.links through the server's own
+// linkPublic), link_set / link_start / link_pick / unlink write H.links (the values never reach H.calls or H.writes), sync { platform }
+const ADS_REDIRECT = 'https://operation-system.ibtekr.club/ads-callback.html';
+function adsPlatformView(H, k) {
+  const link = H.links[k] || {}; const pub = linkPublic(k, link); const m = H.adsMeta[k] || {};
+  if (k === 'meta' && !pub.ready) { // Meta's old knob (opts.mktAds) stands for the owner's secrets
+    const a = H.ads; return { configured: a.configured === true, oauth: false, fields: a.configured ? { access_token: '••••EAAB', account_id: '1122334455' } : {}, missing: a.configured ? [] : ['access_token', 'account_id'],
+      account: a.account ? { id: '1122334455', ...a.account } : null, synced_at: a.synced_at || null, checked_at: a.checked_at || null, error: a.error || null, text: a.text || null, linked_at: null, candidates: null };
+  }
+  const acc = linkAccount(k, link); const rows = H.adObjects.filter((o) => o.platform === k && o.kind === 'account'); const row = rows.find((o) => o.id === acc) || null; const meta = row ? row.meta || {} : {};
+  return { configured: pub.ready, oauth: pub.oauth, fields: pub.fields, missing: pub.missing, account: row ? { id: acc, name: row.name, currency: meta.currency || null, status: row.status } : acc ? { id: acc, name: m.name || null, currency: null, status: null } : null,
+    synced_at: m.synced_at || meta.synced_at || null, checked_at: m.checked_at || null, error: m.error || meta.error || null, text: m.text || null, linked_at: m.linked_at || null, candidates: m.candidates || null, ...(k === 'google' ? { version: link.version || 'v21' } : {}) };
+}
+function adsStatusBody(H) {
+  const platforms = {}; for (const k of AD_PLATFORMS) platforms[k] = adsPlatformView(H, k);
+  const m = platforms.meta;
+  return { configured: m.configured, account: m.account, synced_at: m.synced_at, checked_at: m.checked_at, error: m.error, text: m.text, platforms, redirect: ADS_REDIRECT };
+}
+function mktAds(c, b) {
+  const { u, hasPerm, isAdmin, json, mock } = c; const H = mock.mkt;
+  H.calls.push({ fn: 'mkt-ads', action: b.action || null, by: u ? u.id : null, days: b.days == null ? null : b.days, platform: b.platform || null, keys: b.fields && typeof b.fields === 'object' ? Object.keys(b.fields) : null });
+  if (!u) return json(401, { error: 'unauthorized' });
+  const admin = isAdmin(u); const view = admin || hasPerm(u, 'marketing.view') !== 'N';
+  if (b.action === 'status') return view ? json(200, adsStatusBody(H)) : json(401, { error: 'unauthorized' });
+  if (b.action === 'rules') return view ? json(200, { result: 'ok', rules: { ...H.rules } }) : json(401, { error: 'unauthorized' });
+  // ش45 decision 5: open / close a Meta campaign from the buyer's confirm card — the admin or marketing.publish = F, the switch on, a known campaign
+  if (b.action === 'campaign_set') {
+    if (!(admin || hasPerm(u, 'marketing.publish') === 'F')) return json(401, { error: 'unauthorized' });
+    const id = String(b.campaign_id || ''); if (!/^[0-9]{1,30}$/.test(id)) return json(400, { error: 'bad_request', field: 'campaign_id' });
+    if (b.status !== 'ACTIVE' && b.status !== 'PAUSED') return json(400, { error: 'bad_request', field: 'status' });
+    const o = H.adObjects.find((x) => (x.platform || 'meta') === 'meta' && x.kind === 'campaign' && String(x.id) === id); if (!o) return json(404, { error: 'not_found' });
+    if (!H.rules.live) return json(409, { error: 'live_off' });
+    (H.campaignSets = H.campaignSets || []).push({ id, status: b.status, by: u.id });
+    if (o.status === b.status) return json(200, { result: 'same', status: b.status });
+    o.status = b.status; H.writes.push({ table: 'meta', op: 'campaign_status', id, status: b.status });
+    return json(200, { result: 'ok', status: b.status });
+  }
+  if (!['sync', 'rules_set', 'live', 'decide', 'link_set', 'link_start', 'link_pick', 'unlink'].includes(b.action)) return json(400, { error: 'unknown_action' });
+  if (!admin) return json(401, { error: 'unauthorized' });
+  const now0 = new Date().toISOString();
+  if (b.action === 'link_set') {
+    const k = platformOf(b.platform); if (!k) return json(400, { error: 'bad_request', field: 'platform' });
+    const p = parseLink(k, b.fields, H.links[k] || {}); if ('error' in p) return json(400, { error: 'bad_request', field: p.error });
+    if (Object.keys(p.link).length) H.links[k] = p.link; else delete H.links[k];
+    H.adsMeta[k] = { ...(H.adsMeta[k] || {}), linked_at: now0, candidates: null };
+    H.writes.push({ table: 'vault', op: 'link_set', platform: k, keys: Object.keys(b.fields || {}) });
+    return json(200, { result: 'ok', platform: k, ...adsPlatformView(H, k) });
+  }
+  if (b.action === 'unlink') {
+    const k = platformOf(b.platform); if (!k) return json(400, { error: 'bad_request', field: 'platform' });
+    delete H.links[k]; delete H.adsMeta[k]; H.writes.push({ table: 'vault', op: 'unlink', platform: k });
+    return json(200, { result: 'ok', platform: k, ...adsPlatformView(H, k) });
+  }
+  if (b.action === 'link_start') {
+    const k = platformOf(b.platform); if (!k || k === 'meta') return json(400, { error: 'bad_request', field: 'platform' });
+    const pub = linkPublic(k, H.links[k] || {}); if (!pub.oauth) return json(400, { error: 'bad_request', field: 'oauth' });
+    H.seq += 1; const state = 'st' + String(H.seq).padStart(30, '0');
+    return json(200, { result: 'ok', platform: k, url: (k === 'tiktok' ? 'https://business-api.tiktok.com/portal/auth?app_id=' + encodeURIComponent(H.links[k].app_id) : 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + encodeURIComponent(H.links[k].client_id)) + '&state=' + state + '&redirect_uri=' + encodeURIComponent(ADS_REDIRECT) });
+  }
+  if (b.action === 'link_pick') {
+    const k = platformOf(b.platform); if (!k || k === 'meta') return json(400, { error: 'bad_request', field: 'platform' });
+    const cand = ((H.adsMeta[k] || {}).candidates || []).find((x) => String(x.id) === String(b.account)); if (!cand) return json(400, { error: 'bad_request', field: 'account' });
+    H.links[k] = { ...(H.links[k] || {}), [k === 'tiktok' ? 'advertiser_id' : 'customer_id']: cand.id }; H.adsMeta[k] = { ...(H.adsMeta[k] || {}), name: cand.name || null, candidates: null, linked_at: now0 };
+    return json(200, { result: 'ok', linked: true, platform: k, ...adsPlatformView(H, k) });
+  }
+  if (b.action === 'rules_set') { // the numbers and the modes only — never live
+    const p = rulesPatch(b.rules); if ('error' in p) return json(400, p);
+    Object.assign(H.rules, p.patch); H.writes.push({ table: 'settings', op: 'buyer_rules', keys: Object.keys(p.patch) }); return json(200, { result: 'ok', rules: { ...H.rules } });
+  }
+  if (b.action === 'live') {
+    if (typeof b.on !== 'boolean') return json(400, { error: 'bad_request', field: 'on' });
+    H.rules.live = b.on; H.writes.push({ table: 'settings', op: 'buyer_live', on: b.on }); return json(200, { result: 'ok', rules: { ...H.rules } });
+  }
+  if (b.action === 'decide') return mktDecide(c, b);
+  // sync: every linked platform (or the one asked); the knob adsFail fails Meta's run with our code
+  const only = b.platform == null ? null : platformOf(b.platform); if (b.platform != null && !only) return json(400, { error: 'bad_request', field: 'platform' });
+  const linked = AD_PLATFORMS.filter((k) => (!only || only === k) && adsPlatformView(H, k).configured);
+  if (!linked.length) return json(503, { error: 'not_configured', configured: false });
+  const now = new Date().toISOString(); const out = {}; let okAny = false;
+  for (const k of linked) {
+    if (k === 'meta' && H.adsFail) { Object.assign(H.ads, { checked_at: now, error: H.adsFail }); out[k] = { platform: k, error: H.adsFail }; continue; }
+    if (k === 'meta') Object.assign(H.ads, { synced_at: now, checked_at: now, error: null }); else H.adsMeta[k] = { ...(H.adsMeta[k] || {}), synced_at: now, checked_at: now, error: null };
+    okAny = true; out[k] = { platform: k, days: Number(b.days) || 3, campaigns: H.adObjects.filter((o) => o.platform === k && o.kind === 'campaign').length, ads: H.adObjects.filter((o) => o.platform === k && o.kind === 'ad').length, stats: H.adStats.filter((x) => x.platform === k).length };
+  }
+  if (!okAny) { const f = Object.values(out)[0]; return json(502, { error: f.error, platform: f.platform, platforms: out }); }
+  const sum = (key) => Object.values(out).reduce((n, r) => n + (Number(r[key]) || 0), 0);
+  return json(200, { result: 'ok', days: Number(b.days) || 3, campaigns: sum('campaigns'), ads: sum('ads'), stats: sum('stats'), platforms: out });
+}
+
+// 9.5.4: the admin's decision on a suggestion as mkt-ads makes it — reject; creative → a designer request; tracking → reviewed;
+// the money kinds: the switch off = recorded only; on = «PAUSED» or the budget by the step (≤ 30%, the daily cap over the rest of
+// the account = H.accountDaily) — the knob decideFail answers Meta's write with our code
+function mktDecide(c, b) {
+  const { u, json, mock } = c; const H = mock.mkt; const now = new Date().toISOString();
+  const s = H.suggestions.find((x) => x.id === Number(b.id)); if (!s) return json(404, { error: 'not_found' });
+  if (!['approve', 'edit', 'reject'].includes(b.decision)) return json(400, { error: 'bad_request', field: 'decision' });
+  if (s.status !== 'pending') return json(409, { error: 'decided' });
+  const note = b.note == null ? null : line(b.note, 300) || null;
+  const base = { decided_by: u.id, decided_at: now, note };
+  const done = (patch, body) => { Object.assign(s, base, patch); H.writes.push({ table: 'mkt_suggestions', op: 'decide', id: s.id, decision: b.decision, status: s.status }); return json(200, { result: 'ok', status: s.status, ...body }); };
+  if (b.decision === 'reject') return done({ status: 'rejected' }, {});
+  if (s.kind === 'creative') {
+    // 0082: ticket_request_server — a design team request as the deciding member, to «ديزاينر» (the old mkt_requests row is gone)
+    const T = mock.tickets; const id = T.reduce((m, x) => Math.max(m, x.id), 0) + 1; const ad = String(s.title || '').replace(/^إعلان «|» الناس زهقت منه$/g, '');
+    const by = (mock.profiles || []).find((p) => p.id === u.id) || {}; const desc = 'الميديا باير: ' + (s.title || '') + (note ? ' — ' + note : '');
+    T.push({ id, type: 'internal', kind: 'design', project: s.campaign_name || null, title: 'نسخة جديدة لإعلان «' + ad + '»', description: desc, priority: 'normal', assignee_role: 'ديزاينر', order_number: null, order_id: null, customer: null,
+      cs_customer_id: null, cs_conversation_id: null, vendor_id: null, vendor: null, reason: null, follow_up: null, attachments: [], status: 'open', created_by: u.id, created_by_name: by.name || u.name || 'عضو', created_by_role: 'مدير النظام',
+      created_at: now, last_update: now, reopen_count: 0, resolution_outcome: null, resolution_note: null, resolved_by: null, resolved_by_name: null, resolved_at: null, closed_by: null, closed_by_name: null, closed_at: null });
+    const evId = () => mock.ticketEvents.reduce((m, e) => Math.max(m, e.id), 0) + 1;
+    mock.ticketEvents.push({ id: evId(), ticket_id: id, kind: 'event', at: now, actor: u.id, actor_name: by.name || 'عضو', actor_role: 'مدير النظام', text: (by.name || 'عضو') + ' وافق على اقتراح الميديا باير وفتح طلب لدور «ديزاينر»', old_value: null, new_value: null, attachments: [] });
+    mock.ticketEvents.push({ id: evId(), ticket_id: id, kind: 'message', at: now, actor: u.id, actor_name: by.name || 'عضو', actor_role: 'مدير النظام', text: desc, old_value: null, new_value: null, attachments: [] });
+    return done({ status: 'done', result: { request: true, ticket: id } }, { request: true, ticket: id });
+  }
+  if (s.kind === 'tracking') return done({ status: 'done', result: { reviewed: true } }, {});
+  let pct = s.pct;
+  if (s.kind !== 'stop') {
+    if (b.decision === 'edit') { pct = Number(b.value); if (!Number.isInteger(pct) || !pct || Math.sign(pct) !== Math.sign(s.pct || 0) || Math.abs(pct) > MAX_STEP) return json(400, { error: 'bad_request', field: 'value' }); }
+    else if (b.value != null) return json(400, { error: 'bad_request', field: 'value' });
+  }
+  if (!H.rules.live) return done({ status: b.decision === 'edit' ? 'edited' : 'approved', value: b.decision === 'edit' ? pct : null, result: { live: false } }, { live: false });
+  if (H.decideFail) { Object.assign(s, base, { status: 'failed', error: H.decideFail }); H.writes.push({ table: 'mkt_suggestions', op: 'decide', id: s.id, decision: b.decision, status: 'failed' }); return json(502, { error: H.decideFail }); }
+  if (s.kind === 'stop') { const camp = H.adObjects.find((o) => o.kind === 'campaign' && o.id === s.campaign_id); if (camp) camp.status = 'PAUSED'; return done({ status: 'done', result: { status: 'PAUSED' } }, { status: 'done' }); }
+  const budget = Number(s.data && s.data.daily_budget) || 0;
+  const plan = budgetPlan({ campaign: { id: s.campaign_id, daily_budget: budget ? Math.round(budget * 100) : null }, adsets: [] }, pct, H.rules, H.accountDaily);
+  if ('error' in plan) { Object.assign(s, base, { status: 'failed', value: pct, error: plan.error, result: plan }); H.writes.push({ table: 'mkt_suggestions', op: 'decide', id: s.id, decision: b.decision, status: 'failed' }); return json(409, { error: plan.error, max: plan.max ?? null, cap: plan.cap ?? null, after: plan.after ?? null }); }
+  const camp = H.adObjects.find((o) => o.kind === 'campaign' && o.id === s.campaign_id); if (camp) camp.meta = { ...camp.meta, daily_budget: plan.after };
+  return done({ status: 'done', value: pct, result: plan }, { before: plan.before, after: plan.after, updates: plan.updates.length });
+}
+
+// 9.5.5: the video through the bridge as ai-images runs it (decisions 58–61) — a job a call, finished after videoDelay polls, the
+// results as objects in bucket marketing (vid-<piece>-<part>-mk<n>.mp4 / .mp3), the assembly chain (cut → voice → music) going on
+// by itself in video_poll; the link never reaches the page. Knobs: mktBridge false (not linked), mktVideoDelay, mktVideoFail (a kind
+// whose next job fails).
+function mktVideo(c, b, campaign) {
+  const { u, json, mock } = c; const H = mock.mkt; const now = new Date().toISOString();
+  const action = String(b.action).replace('video_', '');
+  const p = parseVideo(action, b); if ('error' in p) return json(400, p);
+  const camp = campaign(p.req.campaignId); if (!camp) return json(404, { error: 'not_found' });
+  const piece = (camp.state.pieces || []).find((x) => x && x.id === p.req.piece && x.kind === 'فيديو'); if (!piece) return json(400, { error: 'bad_request', field: 'piece' });
+  if (!H.bridge) return json(503, { error: 'not_linked', status: 401 });
+  const jobs = () => H.videoJobs.filter((j) => j.campaign_id === camp.id && j.piece === piece.id);
+  const open = () => jobs().filter((j) => j.status === 'queued' || j.status === 'running');
+  const add = (row) => { const j = { id: H.videoJobs.reduce((m, x) => Math.max(m, x.id), 0) + 1, campaign_id: camp.id, piece: piece.id, scene: null, creation_ref: null, status: 'running', url: null, path: null, bytes: null, duration: null, error: null, data: {}, created_by: u.id, created_at: now, updated_at: now, done_at: null, polls: 0, ...row }; H.videoJobs.push(j); H.writes.push({ table: 'mkt_video_jobs', op: 'insert', id: j.id, kind: j.kind, scene: j.scene }); return j; };
+  const ref = (k) => k + '-' + (++H.seq);
+  const view = (j) => jobView(j);
+  const scenes = Array.isArray(piece.scenes) ? piece.scenes : [];
+  if (action === 'clip') {
+    const chained = piece.method === 'chained' && piece.model !== 'kling-2.5';
+    if (!scenes.length) return json(400, { error: 'bad_request', field: 'scenes' });
+    if (!chained && (p.req.scene == null || !scenes[p.req.scene])) return json(400, { error: 'bad_request', field: 'scene' });
+    if (open().length >= MAX_OPEN_JOBS) return json(409, { error: 'busy_piece', open: open().length });
+    const frame = chained ? scenes[0] : scenes[p.req.scene]; if (!campaignPathOk(camp.id, frame.img)) return json(400, { error: 'bad_request', field: 'image' });
+    return json(200, { result: 'ok', job: view(add({ kind: 'clip', scene: chained ? null : p.req.scene, creation_ref: ref('clip'), data: { model: piece.model || 'seedance-2.5', duration: chained ? scenes.reduce((a, s) => a + (s.d || 0), 0) : frame.d, method: chained ? 'chained' : 'separate' } })) });
+  }
+  if (action === 'voice' || action === 'music') {
+    if (open().length >= MAX_OPEN_JOBS) return json(409, { error: 'busy_piece', open: open().length });
+    return json(200, { result: 'ok', job: view(add({ kind: action, creation_ref: ref(action === 'voice' ? 'vo' : 'mu'), data: action === 'voice' ? { voice: p.req.voice, chars: p.req.text.length } : { type: p.req.type } })) });
+  }
+  if (action === 'upload') {
+    if (!H.objects.has(p.req.path)) return json(400, { error: 'bad_request', field: 'path' });
+    return json(200, { result: 'ok', job: view(add({ kind: 'upload', creation_ref: ref('upl'), status: 'done', path: p.req.path, bytes: (H.objects.get(p.req.path) || {}).size || 0, done_at: now, data: { role: p.req.role } })) });
+  }
+  if (action === 'assemble') {
+    if (open().length) return json(409, { error: 'busy_piece', open: open().length });
+    const plan = mixPlan(jobs(), scenes, piece.method); if ('error' in plan) return json(409, { error: 'clips' });
+    const chain = plan.steps; const first = chain[0];
+    let j;
+    if (first === 'concat') j = add({ kind: 'assemble', creation_ref: ref('cut'), data: { chain, step: 0, plan, final: chain.length === 1 } });
+    else if (first) { const nx = nextMix(['cut', ...chain], 0, plan); j = add({ kind: 'mix', creation_ref: ref('mix'), data: { chain: ['cut', ...chain], step: 1, plan, role: nx.role, final: chain.length === 1 } }); }
+    else { const src = jobs().find((x) => x.creation_ref === plan.clips[0] && x.status === 'done'); j = add({ kind: 'mix', creation_ref: plan.clips[0], status: 'done', path: src ? src.path : null, bytes: src ? src.bytes : null, done_at: now, data: { chain: [], step: 0, plan, final: true } }); }
+    return json(200, { result: 'ok', job: view(j) });
+  }
+  // poll
+  const partOf = (j) => (j.kind === 'clip' ? (j.scene == null ? 'all' : 's' + (j.scene + 1)) : j.kind === 'voice' ? 'vo' : j.kind === 'music' ? 'mu' : j.kind === 'assemble' ? 'cut' : 'mix');
+  for (const j of open()) {
+    j.polls += 1; if (j.polls < H.videoDelay) continue;
+    if (H.videoFail && H.videoFail === j.kind) { Object.assign(j, { status: 'failed', error: 'failed', updated_at: now }); H.videoFail = null; continue; }
+    const ext = j.kind === 'voice' || j.kind === 'music' ? 'mp3' : 'mp4'; H.seq += 1;
+    const path = videoPath(camp.id, piece.id, partOf(j), 'mk' + H.seq, ext);
+    H.objects.set(path, { type: ext === 'mp4' ? 'video/mp4' : 'audio/mpeg', size: 4096, by: u.id });
+    Object.assign(j, { status: 'done', url: 'https://pikaso.cdnpk.net/v/' + j.creation_ref + '.' + ext, path, bytes: 4096, done_at: now, updated_at: now });
+    const d = j.data || {};
+    if ((j.kind === 'assemble' || j.kind === 'mix') && Array.isArray(d.chain) && d.plan) {
+      const nx = nextMix(d.chain, Number(d.step) || 0, d.plan);
+      if (nx) add({ kind: 'mix', creation_ref: ref('mix'), data: { chain: d.chain, step: nx.step, plan: d.plan, role: nx.role, final: nx.step === d.chain.length - 1 } });
+    }
+  }
+  const all = jobs(); const final = all.filter((j) => j.status === 'done' && (j.kind === 'mix' || j.kind === 'assemble') && j.data && j.data.final === true).pop() || null;
+  return json(200, { result: 'ok', jobs: all.map(view), open: open().length, final: final ? view(final) : null });
+}
