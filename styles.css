@@ -562,7 +562,9 @@ p .type-caret, li .type-caret { width: 0.45em; height: 0.95em; }
 
 /* The sky: a fixed layer of planets, spacecraft and maths symbols behind
    everything. The page content is lifted above it. */
-.sky { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+/* 100lvh is the screen with a phone's address bar hidden, so the layer keeps
+   one height while that bar slides in and out */
+.sky { position: fixed; top: 0; left: 0; right: 0; height: 100vh; height: 100lvh; z-index: 0; overflow: hidden; pointer-events: none; }
 .sky__item {
   position: absolute; left: 0; top: 0; display: grid; place-items: center;
   color: var(--line-strong); opacity: 0.38; will-change: transform;
@@ -579,8 +581,8 @@ main, .foot, .hero-term { position: relative; z-index: 1; }
    frame and the device stage are part see-through, and the drifting pieces
    are a little brighter to carry through them. */
 .card, .term, .hero__photo { background: color-mix(in srgb, var(--panel) 46%, transparent); }
-.sky__item { opacity: 0.5; }
-.sky__item--green { opacity: 0.34; }
+.sky__item { color: #456253; opacity: 0.42; }
+.sky__item--green { color: var(--green); opacity: 0.27; }
 
 /* Project screenshots in device frames, drawn in CSS: a space-grey laptop for
    the desktop view and, when there is one, a phone standing in front of it. */

@@ -268,7 +268,9 @@
   var seed = 20261122;
   function rnd() { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; }
 
-  var W = window.innerWidth, H = window.innerHeight;
+  // the layer is as tall as the screen with the phone's address bar hidden, so its
+  // height stays the same when that bar slides in and out during a scroll
+  var W = window.innerWidth, H = sky.offsetHeight || window.innerHeight;
   var count = W < 640 ? 32 : W < 1100 ? 56 : 86;
   var icons = set[mode], items = [], iconAt = 0, textAt = 0;
   for (var n = 0; n < count; n++) {
@@ -292,7 +294,7 @@
     items.push({
       el: el, w: w, h: h,
       x: 0.02 + ((n * 0.61803) % 1) * 0.96,   // spread evenly across the width
-      y: rnd(),                               // 0..1 of the looping height
+      py: rnd() * (H + 160) - 80,             // where it is down the screen, in px
       depth: 0.07 + rnd() * 0.33,             // how fast it drifts with the scroll
       turn: written ? (rnd() - 0.5) * 0.03 : (rnd() - 0.5) * 0.16,   // spin per pixel scrolled; writing barely tilts
       sway: rnd() * 6.28, dir: rnd() < 0.5 ? -1 : 1,
@@ -301,20 +303,24 @@
   }
 
   var still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  var mx = -9999, my = -9999, last = 0, t = 0;
+  var mx = -9999, my = -9999, last = 0, t = 0, lastSy = 0;
   var REACH = 160, PUSH = 2.2, SPRING = 0.03, DRAG = 0.86;
 
   function place(time) {
     // t is the seconds the sky has been on screen; a long gap (a hidden tab) counts as one frame
-    if (last) t += Math.min(0.05, (time - last) / 1000);
-    last = time;
-    var sy = still ? 0 : window.scrollY, loop = H + 160;
+    var dt = last ? Math.min(0.05, (time - last) / 1000) : 0;
+    t += dt; last = time;
+    var sy = still ? 0 : window.scrollY, loop = H + 160, scrolled = sy - lastSy;
+    lastSy = sy;
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
       // where it would sit with no mouse nearby: floating up on its own, faster while the
-      // page scrolls, looping, with a slow sway from side to side
+      // page scrolls, with a slow sway from side to side. Each piece is moved on from where
+      // it was, and goes round to the bottom once it is off the top, so a change in the
+      // screen's size never throws the whole sky to new places.
       var bx = it.x * W + Math.sin(sy / 260 + t * 0.35 + it.sway) * 20 * it.dir;
-      var by = ((((it.y * loop - sy * it.depth - t * (6 + it.depth * 45)) % loop) + loop) % loop) - 80;
+      it.py = ((((it.py - scrolled * it.depth - dt * (6 + it.depth * 45) + 80) % loop) + loop) % loop) - 80;
+      var by = it.py;
       // icons turn slowly all the time; writing only rocks a little, so it stays readable
       var idle = it.written ? Math.sin(t * 0.4 + it.sway) * 4 : t * it.turn * 70;
       if (!still) {
@@ -337,7 +343,7 @@
 
   place(0);
   if (still) return;
-  window.addEventListener("resize", function () { W = window.innerWidth; H = window.innerHeight; });
+  window.addEventListener("resize", function () { W = window.innerWidth; H = sky.offsetHeight || window.innerHeight; });
   if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
     document.addEventListener("pointermove", function (e) { if (e.pointerType !== "touch") { mx = e.clientX; my = e.clientY; } });
     document.documentElement.addEventListener("pointerleave", function () { mx = my = -9999; });
