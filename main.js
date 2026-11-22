@@ -147,12 +147,12 @@
     })();
   }
   function duration(part, heading) {
-    return heading ? Math.min(600, 120 + part.text.length * 40) : Math.max(320, Math.min(900, part.text.length * 5));
+    return heading ? Math.min(900, 200 + part.text.length * 60) : Math.max(550, Math.min(1900, part.text.length * 11));
   }
 
   // The hero name types first; the lines under it wait their turn.
   var nameEl = document.getElementById("hero-name");
-  var heroReady = Date.now() + (nameEl ? 350 + nameEl.textContent.length * 60 + 150 : 0);
+  var heroReady = Date.now() + (nameEl ? 350 + nameEl.textContent.length * 85 + 150 : 0);
 
   var queue = [], draining = false;
   function drain() {
@@ -161,7 +161,7 @@
     var item = queue.shift();
     type(item.part, duration(item.part, item.heading), item.heading ? 120 : 0);
     // a long backlog (a fast scroll) speeds up, so nothing waits blank for long
-    setTimeout(drain, item.heading ? duration(item.part, true) + 140 : Math.max(25, Math.min(110, 700 / (queue.length + 1))));
+    setTimeout(drain, item.heading ? duration(item.part, true) + 140 : Math.max(40, Math.min(190, 1200 / (queue.length + 1))));
   }
 
   // Everything still waiting to be typed. A plain position check finds what is
@@ -231,7 +231,7 @@
     n++;
     done.textContent = text.slice(0, n);
     wait.textContent = text.slice(n);
-    if (n < text.length) setTimeout(tick, 60);
+    if (n < text.length) setTimeout(tick, 85);
   }, 350);
 })();
 
