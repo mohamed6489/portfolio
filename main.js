@@ -147,15 +147,33 @@
     })();
   }
   function duration(part, heading) {
-    return heading ? Math.min(900, 200 + part.text.length * 60) : Math.max(550, Math.min(1900, part.text.length * 11));
+    return heading ? Math.min(1150, 250 + part.text.length * 75) : Math.max(700, Math.min(2400, part.text.length * 14));
   }
 
   // The hero name types first; the lines under it wait their turn.
   var nameEl = document.getElementById("hero-name");
-  var heroReady = Date.now() + (nameEl ? 350 + nameEl.textContent.length * 85 + 150 : 0);
+  var heroReady = Date.now() + (nameEl ? 350 + nameEl.textContent.length * 105 + 150 : 0);
+
+  // shows a piece whole, with no typing
+  function finish(part) {
+    part.done.textContent = part.text;
+    part.wait.textContent = "";
+    part.caret.hidden = true;
+  }
 
   var queue = [], draining = false;
   function drain() {
+    // Whatever has left the screen since it was queued is shown whole, so the
+    // text in front of the reader never waits its turn behind text they have
+    // already scrolled past. All positions are read first, then the page is changed.
+    var h = window.innerHeight, gone = [];
+    queue = queue.filter(function (item) {
+      var r = item.el.getBoundingClientRect();
+      if (r.bottom > 0 && r.top < h) return true;
+      gone.push(item);
+      return false;
+    });
+    gone.forEach(function (item) { finish(item.part); });
     if (!queue.length) { draining = false; return; }
     draining = true;
     var item = queue.shift();
@@ -170,13 +188,15 @@
   var pending = [];
   function sweep() {
     if (!pending.length) return;
-    var limit = window.innerHeight * 0.94, now = Date.now(), shown = [];
+    var limit = window.innerHeight * 0.94, now = Date.now(), shown = [], past = [];
     pending = pending.filter(function (el) {
-      if (el._hero && now < heroReady) return true;
       var r = el.getBoundingClientRect();
+      if (r.bottom <= 0 && r.height) { past.push(el); return false; }   // scrolled past before its turn came
+      if (el._hero && now < heroReady) return true;
       if (r.top < limit && r.bottom > 0) { shown.push(el); return false; }
       return true;
     });
+    past.forEach(function (el) { finish(el._type.part); });
     if (!pending.length) clearInterval(timer);
     if (!shown.length) return;
     // page order, so a heading types before the paragraph under it
@@ -189,7 +209,7 @@
     Array.prototype.forEach.call(document.querySelectorAll(selector), function (el) {
       var part = prepare(el);
       if (!part) return;
-      el._type = { part: part, heading: heading };
+      el._type = { part: part, heading: heading, el: el };
       el._hero = !!el.closest(".hero");
       pending.push(el);
     });
@@ -231,7 +251,7 @@
     n++;
     done.textContent = text.slice(0, n);
     wait.textContent = text.slice(n);
-    if (n < text.length) setTimeout(tick, 85);
+    if (n < text.length) setTimeout(tick, 105);
   }, 350);
 })();
 
