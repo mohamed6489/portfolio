@@ -370,6 +370,28 @@
   }
 })();
 
+// Phone screenshots: the status bar above each one takes the colour of the top
+// of the screenshot, the way an app colours the status bar on a real phone.
+// Without this the bar stays black, which is the stylesheet's own colour.
+(function () {
+  var shots = document.querySelectorAll(".mock__phone img");
+  function tint(img) {
+    if (!img.naturalWidth) return;
+    try {
+      var c = document.createElement("canvas");
+      c.width = c.height = 1;
+      var ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0, img.naturalWidth, 4, 0, 0, 1, 1);   // the top four rows, averaged
+      var p = ctx.getImageData(0, 0, 1, 1).data;
+      img.style.backgroundColor = "rgb(" + p[0] + "," + p[1] + "," + p[2] + ")";
+    } catch (e) { /* the picture cannot be read (opened from a file): the bar stays black */ }
+  }
+  for (var i = 0; i < shots.length; i++) {
+    if (shots[i].complete) tint(shots[i]);
+    else shots[i].addEventListener("load", function () { tint(this); });
+  }
+})();
+
 // Pixel reveal. Each picture starts under a grid of small squares in the site's
 // own colours. When it scrolls into view the squares dissolve along one
 // direction with a ragged leading edge, and the cover is then taken away for

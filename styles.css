@@ -622,19 +622,23 @@ main, .foot, .hero-term { position: relative; z-index: 1; }
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
-/* Phone: a metal band round a black-bezel screen, with a camera pill and a side button */
+/* Phone: a metal band round a black-bezel screen, with a camera pill and a side button.
+   The screen is exactly as wide as the screenshot, so nothing is cut off at the
+   sides, and the screenshot starts below a status bar that holds the camera pill
+   (main.js gives that bar the colour of the top of the screenshot). */
 .mock__phone {
-  position: absolute; right: 20px; bottom: 20px; width: 20%; min-width: 68px; aspect-ratio: 9 / 19.3;
+  position: absolute; right: 20px; bottom: 20px; width: 20%; min-width: 68px;
   padding: 3px; border: 0; overflow: visible; border-radius: 22px;
   background: linear-gradient(140deg, #aab4ae 0%, #5a655f 20%, #1e2421 52%, #2b322e 74%, #7c8881 100%);
   box-shadow: 0 0 0 1px #0a0d0b, 0 28px 50px -16px rgba(0, 0, 0, 0.95), 0 10px 20px -10px rgba(0, 0, 0, 0.85);
 }
 .card__shot .mock__phone img {
-  display: block; width: 100%; height: 100%; aspect-ratio: auto; object-fit: cover; object-position: top center;
+  display: block; box-sizing: content-box; width: calc(100% - 5px); height: auto; aspect-ratio: 400 / 845;
+  padding-top: 13%; background: #050706; object-fit: cover; object-position: top center;
   border: 2.5px solid #050706; border-radius: 19px; flex: none; min-height: 0;
 }
 .mock__phone::before {
-  content: ""; position: absolute; left: 50%; top: 10px; z-index: 1; width: 30%; height: 7px; transform: translateX(-50%);
+  content: ""; position: absolute; left: 50%; top: 8px; z-index: 1; width: 30%; height: 6px; transform: translateX(-50%);
   background: #050706; border-radius: 6px;
 }
 .mock__phone::after {
@@ -647,8 +651,8 @@ main, .foot, .hero-term { position: relative; z-index: 1; }
   .mock__pc { padding: 7px 7px 9px; border-radius: 12px 12px 4px 4px; }
   .mock__pc::after { height: 11px; }
   .mock__phone { right: 12px; bottom: 16px; border-radius: 18px; padding: 2.5px; }
-  .card__shot .mock__phone img { border-width: 2px; border-radius: 16px; }
-  .mock__phone::before { top: 8px; height: 6px; }
+  .card__shot .mock__phone img { width: calc(100% - 4px); border-width: 2px; border-radius: 16px; }
+  .mock__phone::before { top: 6px; height: 5px; }
 }
 
 /* Titles: every heading is bold, with each word starting on a capital. */
