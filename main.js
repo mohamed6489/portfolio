@@ -105,6 +105,65 @@
   });
 })();
 
+// The mouse pointer: a green dot exactly under the mouse and a ring that trails a
+// little behind it, widens over anything that can be pressed and tightens on a
+// click. Mouse only. With reduced motion the ring keeps up instead of trailing.
+(function () {
+  if (!window.matchMedia("(hover: hover) and (pointer: fine)").matches || !window.requestAnimationFrame) return;
+  var direct = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var PRESS = "a, button, summary, select, label[for], [role='button'], input, textarea";
+  var root = document.documentElement;
+
+  function make(name) {
+    var el = document.createElement("div");
+    el.className = "cursor " + name;
+    el.setAttribute("aria-hidden", "true");
+    document.body.appendChild(el);
+    return el;
+  }
+  var dot = make("cursor__dot"), ring = make("cursor__ring");
+  var x = 0, y = 0, rx = 0, ry = 0, frame = 0, last = 0, shown = false;
+
+  function paint(now) {
+    frame = 0;
+    // the ring closes the gap by time, not by frame, so it trails the same on any screen
+    var dt = last ? Math.min(250, now - last) : 16;
+    last = now;
+    var k = direct ? 1 : 1 - Math.exp(-dt / 55);
+    rx += (x - rx) * k; ry += (y - ry) * k;
+    if (Math.abs(x - rx) < 0.1 && Math.abs(y - ry) < 0.1) { rx = x; ry = y; }
+    dot.style.transform = "translate3d(" + x + "px," + y + "px,0)";
+    ring.style.transform = "translate3d(" + rx.toFixed(1) + "px," + ry.toFixed(1) + "px,0)";
+    if (rx !== x || ry !== y) frame = requestAnimationFrame(paint);   // runs only until the ring has caught up
+    else last = 0;
+  }
+  function show(on) {
+    shown = on;
+    root.classList.toggle("has-cursor", on);
+    dot.classList.toggle("is-on", on);
+    ring.classList.toggle("is-on", on);
+  }
+
+  document.addEventListener("pointermove", function (e) {
+    if (e.pointerType === "touch") return;
+    x = e.clientX; y = e.clientY;
+    if (!shown) { rx = x; ry = y; show(true); }
+    var over = e.target && e.target.closest ? e.target : null;
+    ring.classList.toggle("is-link", !!(over && over.closest(PRESS)));
+    var ink = !!(over && over.closest(".btn--solid, .skip"));   // on a green button the pointer turns dark to stay visible
+    dot.classList.toggle("is-ink", ink);
+    ring.classList.toggle("is-ink", ink);
+    if (!frame) frame = requestAnimationFrame(paint);
+  });
+  document.addEventListener("pointerdown", function (e) {
+    if (e.pointerType === "touch") { show(false); return; }   // a finger on a touch laptop: back to no pointer
+    ring.classList.add("is-down");
+  });
+  document.addEventListener("pointerup", function () { ring.classList.remove("is-down"); });
+  root.addEventListener("pointerleave", function () { show(false); });
+  window.addEventListener("blur", function () { ring.classList.remove("is-down"); });
+})();
+
 // Typing on scroll: headings are typed like commands as they come into view,
 // and paragraphs print after them, fast. The full text stays in the page the
 // whole time (untyped letters are only transparent), so layout never jumps and

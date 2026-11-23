@@ -657,3 +657,30 @@ main, .foot, .hero-term { position: relative; z-index: 1; }
 
 /* Titles: every heading is bold, with each word starting on a capital. */
 h1, h2, h3, .hero__name, .lane__label { font-weight: 700; text-transform: capitalize; }
+
+/* Mouse pointer: a small green dot right under the mouse and a ring that trails
+   it and widens over anything that can be pressed. main.js draws both and adds
+   .has-cursor to the page; only then is the ordinary pointer hidden, so without
+   the script, or on a touch screen, nothing changes. */
+.has-cursor, .has-cursor * { cursor: none !important; }
+.cursor {
+  position: fixed; left: 0; top: 0; z-index: 40; pointer-events: none;
+  opacity: 0; transition: opacity 0.2s; will-change: transform;
+}
+.cursor.is-on { opacity: 1; }
+.cursor__dot::before {
+  content: ""; display: block; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%;
+  background: var(--green); box-shadow: 0 0 0 1px rgba(5, 7, 6, 0.6);
+}
+.cursor__ring::before {
+  content: ""; display: block; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
+  border: 1.5px solid var(--green); opacity: 0.75;
+  box-shadow: 0 0 0 1px rgba(5, 7, 6, 0.4), inset 0 0 0 1px rgba(5, 7, 6, 0.4);
+  transition: transform 0.18s ease, background-color 0.18s ease, opacity 0.18s ease;
+}
+.cursor__ring.is-link::before { transform: scale(1.5); background-color: rgba(79, 224, 138, 0.12); opacity: 1; }
+.cursor__ring.is-down::before { transform: scale(0.8); }
+.cursor__ring.is-link.is-down::before { transform: scale(1.25); }
+.cursor__dot.is-ink::before { background: var(--ink); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35); }
+.cursor__ring.is-ink::before { border-color: var(--ink); background-color: rgba(5, 7, 6, 0.1); box-shadow: none; }
+@media (hover: none), (pointer: coarse) { .cursor { display: none; } }
