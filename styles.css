@@ -473,6 +473,10 @@ img.chip__logo { border-radius: 5px; filter: grayscale(1) brightness(1.15); tran
 
 /* Typing on scroll: letters not typed yet are present but see-through */
 .type-wait { color: transparent; }
+
+/* Pixel reveal: the grid of squares main.js lays over a picture until it has
+   scrolled into view. It sits exactly on the picture and never takes a click. */
+.reveal-cover { position: absolute; display: block; pointer-events: none; }
 .type-caret { margin: 0 1px; }
 .block__head p .type-caret { height: 0.95em; }
 

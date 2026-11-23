@@ -350,6 +350,125 @@
   }
 })();
 
+// Pixel reveal. Each picture starts under a grid of small squares in the site's
+// own colours. When it scrolls into view the squares dissolve along one
+// direction with a ragged leading edge, and the cover is then taken away for
+// good. Which pictures, the direction, the colours, the square size, the speed
+// and how ragged the edge is all come from the dashboard's general settings.
+// With reduced motion, or with the setting off, pictures simply show.
+(function () {
+  var cfg = null;
+  try { cfg = JSON.parse(document.getElementById("site-data").textContent).reveal; } catch (e) {}
+  if (!cfg || !window.requestAnimationFrame || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  var which = cfg.images === "projects" ? ".mock img" : cfg.images === "photo" ? ".hero__photo img" : ".mock img, .hero__photo img";
+  var imgs = document.querySelectorAll(which);
+  if (!imgs.length) return;
+
+  var css = getComputedStyle(document.documentElement);
+  var tone = function (name, fallback) { return (css.getPropertyValue(name) || "").trim() || fallback; };
+  var GREEN = tone("--green", "#4fe08a");
+  var DARK = [tone("--panel", "#101712"), tone("--line", "#1f2b23"), tone("--ink", "#0a0f0c")];   // most squares, some, a few
+  var GLOW = 0.05;   // in the mixed look, squares this close to dissolving light up green
+  var ease = function (x) { return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2; };
+  var pending = [], timer = 0;
+
+  function draw(it) {
+    var g = it.grid;
+    if (!g) return;
+    var ctx = it.ctx, p = it.p, i = 0;
+    ctx.clearRect(0, 0, g.w, g.h);
+    for (var r = 0; r < g.rows; r++) {
+      for (var c = 0; c < g.cols; c++, i++) {
+        var left = g.at[i] - p;                 // how long until this square goes
+        if (left <= 0 && p > 0) continue;
+        ctx.fillStyle = cfg.color === "green" || (cfg.color === "mix" && p > 0 && left < GLOW) ? GREEN : DARK[g.shade[i]];
+        ctx.fillRect(c * g.cw, r * g.ch, g.cw + 1, g.ch + 1);   // one px over, so no seams show between squares
+      }
+    }
+  }
+
+  // sizes the cover to the picture and deals each square the moment it dissolves
+  function fit(it) {
+    var img = it.img, w = img.offsetWidth, h = img.offsetHeight;
+    if (!w || !h) return;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2), s = it.canvas.style;
+    it.canvas.width = Math.round(w * dpr); it.canvas.height = Math.round(h * dpr);
+    s.left = img.offsetLeft + "px"; s.top = img.offsetTop + "px"; s.width = w + "px"; s.height = h + "px";
+    s.borderRadius = getComputedStyle(img).borderRadius;
+    it.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var size = Math.max(4, Math.min(cfg.size, w / 12));   // small pictures (the phone) get smaller squares
+    var cols = Math.max(1, Math.ceil(w / size)), rows = Math.max(1, Math.ceil(h / size)), rag = cfg.edge / 100;
+    var at = new Float32Array(cols * rows), shade = new Uint8Array(cols * rows), i = 0;
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++, i++) {
+        var along = cfg.dir === "up" || cfg.dir === "down" ? (rows > 1 ? r / (rows - 1) : 0) : (cols > 1 ? c / (cols - 1) : 0);
+        if (cfg.dir === "up" || cfg.dir === "left") along = 1 - along;
+        at[i] = along * (1 - rag) + Math.random() * rag;
+        var n = Math.random();
+        shade[i] = n < 0.7 ? 0 : n < 0.92 ? 1 : 2;
+      }
+    }
+    it.grid = { cols: cols, rows: rows, cw: w / cols, ch: h / rows, w: w, h: h, at: at, shade: shade };
+    draw(it);
+  }
+
+  function finish(it) {
+    it.done = true;
+    if (it.ro) it.ro.disconnect();
+    if (it.canvas.parentNode) it.canvas.parentNode.removeChild(it.canvas);
+  }
+  function run(it) {
+    requestAnimationFrame(function step(now) {
+      if (!it.start) it.start = now;
+      var x = Math.min(1, (now - it.start) / (cfg.dur * 1000));
+      it.p = ease(x);
+      if (x >= 1) return finish(it);
+      draw(it);
+      requestAnimationFrame(step);
+    });
+  }
+
+  // starts every covered picture that has come into view and has finished loading
+  function sweep() {
+    var limit = window.innerHeight * 0.9;
+    pending = pending.filter(function (it) {
+      var r = it.img.getBoundingClientRect();
+      if (!r.width || r.top > limit || r.bottom < 0 || !it.img.complete) return true;
+      if (it.img.naturalWidth) run(it); else finish(it);   // a picture that failed to load is just uncovered
+      return false;
+    });
+    if (!pending.length) {
+      clearInterval(timer);
+      window.removeEventListener("scroll", sweep);
+      window.removeEventListener("resize", sweep);
+    }
+  }
+
+  for (var k = 0; k < imgs.length; k++) {
+    var img = imgs[k], box = img.parentNode, canvas = document.createElement("canvas");
+    var ctx = canvas.getContext && canvas.getContext("2d");
+    if (!ctx) return;
+    canvas.className = "reveal-cover";
+    canvas.setAttribute("aria-hidden", "true");
+    if (getComputedStyle(box).position === "static") box.style.position = "relative";
+    box.appendChild(canvas);
+    var it = { img: img, canvas: canvas, ctx: ctx, p: 0, start: 0, grid: null, done: false, ro: null };
+    fit(it);
+    if (window.ResizeObserver) {
+      it.ro = new ResizeObserver((function (item) { return function () { if (!item.done) fit(item); }; })(it));
+      it.ro.observe(img);
+    }
+    img.addEventListener("load", sweep);
+    img.addEventListener("error", sweep);
+    pending.push(it);
+  }
+  window.addEventListener("scroll", sweep, { passive: true });
+  window.addEventListener("resize", sweep);
+  timer = setInterval(sweep, 300);
+  sweep();
+})();
+
 // The hero terminal. Everything it prints comes from the page's own content,
 // which build.mjs embeds in the #site-data script tag.
 (function () {
