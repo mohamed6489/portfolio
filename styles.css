@@ -650,3 +650,6 @@ main, .foot, .hero-term { position: relative; z-index: 1; }
   .card__shot .mock__phone img { border-width: 2px; border-radius: 16px; }
   .mock__phone::before { top: 8px; height: 6px; }
 }
+
+/* Titles: every heading is bold, with each word starting on a capital. */
+h1, h2, h3, .hero__name, .lane__label { font-weight: 700; text-transform: capitalize; }
