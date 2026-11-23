@@ -367,38 +367,53 @@
 
   var css = getComputedStyle(document.documentElement);
   var tone = function (name, fallback) { return (css.getPropertyValue(name) || "").trim() || fallback; };
-  var GREEN = tone("--green", "#4fe08a");
-  var DARK = [tone("--panel", "#101712"), tone("--line", "#1f2b23"), tone("--ink", "#0a0f0c")];   // most squares, some, a few
+  // the site's colours as numbers, read off a spare canvas so any CSS colour works
+  var probe = document.createElement("canvas").getContext && document.createElement("canvas").getContext("2d");
+  if (!probe) return;
+  var rgb = function (color) {
+    probe.clearRect(0, 0, 1, 1); probe.fillStyle = color; probe.fillRect(0, 0, 1, 1);
+    var d = probe.getImageData(0, 0, 1, 1).data;
+    return [d[0], d[1], d[2]];
+  };
+  var GREEN = rgb(tone("--green", "#4fe08a"));
+  var DARK = [rgb(tone("--panel", "#101712")), rgb(tone("--line", "#1f2b23")), rgb(tone("--ink", "#0a0f0c"))];   // most squares, some, a few
   var GLOW = 0.05;   // in the mixed look, squares this close to dissolving light up green
   var ease = function (x) { return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2; };
   var pending = [], timer = 0;
 
+  // The cover canvas holds one pixel per square and is stretched over the picture
+  // with hard edges, so even a fine grain of thousands of dots costs one small
+  // image write a frame.
   function draw(it) {
     var g = it.grid;
     if (!g) return;
-    var ctx = it.ctx, p = it.p, i = 0;
-    ctx.clearRect(0, 0, g.w, g.h);
-    for (var r = 0; r < g.rows; r++) {
-      for (var c = 0; c < g.cols; c++, i++) {
-        var left = g.at[i] - p;                 // how long until this square goes
-        if (left <= 0 && p > 0) continue;
-        ctx.fillStyle = cfg.color === "green" || (cfg.color === "mix" && p > 0 && left < GLOW) ? GREEN : DARK[g.shade[i]];
-        ctx.fillRect(c * g.cw, r * g.ch, g.cw + 1, g.ch + 1);   // one px over, so no seams show between squares
-      }
+    var px = g.image.data, p = it.p, n = g.at.length;
+    for (var i = 0, o = 0; i < n; i++, o += 4) {
+      var left = g.at[i] - p;                 // how long until this square goes
+      if (left <= 0 && p > 0) { px[o + 3] = 0; continue; }
+      var c = cfg.color === "green" || (cfg.color === "mix" && p > 0 && left < GLOW) ? GREEN : DARK[g.shade[i]];
+      px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2]; px[o + 3] = 255;
     }
+    it.ctx.putImageData(g.image, 0, 0);
   }
 
+  // Reading the page's layout and changing it are kept apart: pictures are
+  // measured first, then covers are placed. Mixing the two would make the browser
+  // lay the whole page out again for every picture.
+  function measure(it) {
+    var img = it.img;
+    return { w: img.offsetWidth, h: img.offsetHeight, x: img.offsetLeft, y: img.offsetTop, round: getComputedStyle(img).borderRadius };
+  }
   // sizes the cover to the picture and deals each square the moment it dissolves
-  function fit(it) {
-    var img = it.img, w = img.offsetWidth, h = img.offsetHeight;
-    if (!w || !h) return;
-    var dpr = Math.min(window.devicePixelRatio || 1, 2), s = it.canvas.style;
-    it.canvas.width = Math.round(w * dpr); it.canvas.height = Math.round(h * dpr);
-    s.left = img.offsetLeft + "px"; s.top = img.offsetTop + "px"; s.width = w + "px"; s.height = h + "px";
-    s.borderRadius = getComputedStyle(img).borderRadius;
-    it.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    var size = Math.max(4, Math.min(cfg.size, w / 12));   // small pictures (the phone) get smaller squares
+  function place(it, m) {
+    if (!m.w || !m.h || (m.w === it.w && m.h === it.h && m.x === it.x && m.y === it.y)) return;
+    it.w = m.w; it.h = m.h; it.x = m.x; it.y = m.y;
+    var s = it.canvas.style, w = m.w, h = m.h;
+    s.left = m.x + "px"; s.top = m.y + "px"; s.width = w + "px"; s.height = h + "px";
+    s.borderRadius = m.round;
+    var size = Math.max(2, Math.min(cfg.size, w / 12));   // small pictures (the phone) get smaller squares
     var cols = Math.max(1, Math.ceil(w / size)), rows = Math.max(1, Math.ceil(h / size)), rag = cfg.edge / 100;
+    it.canvas.width = cols; it.canvas.height = rows;
     var at = new Float32Array(cols * rows), shade = new Uint8Array(cols * rows), i = 0;
     for (var r = 0; r < rows; r++) {
       for (var c = 0; c < cols; c++, i++) {
@@ -409,13 +424,21 @@
         shade[i] = n < 0.7 ? 0 : n < 0.92 ? 1 : 2;
       }
     }
-    it.grid = { cols: cols, rows: rows, cw: w / cols, ch: h / rows, w: w, h: h, at: at, shade: shade };
+    it.grid = { at: at, shade: shade, image: it.ctx.createImageData(cols, rows) };
     draw(it);
   }
+  function placeAll(list) {
+    var sizes = list.map(measure);
+    for (var i = 0; i < list.length; i++) place(list[i], sizes[i]);
+  }
+
+  var resized = window.ResizeObserver ? new ResizeObserver(function (entries) {
+    placeAll(entries.map(function (e) { return e.target._cover; }).filter(function (it) { return it && !it.done; }));
+  }) : null;
 
   function finish(it) {
     it.done = true;
-    if (it.ro) it.ro.disconnect();
+    if (resized) resized.unobserve(it.img);
     if (it.canvas.parentNode) it.canvas.parentNode.removeChild(it.canvas);
   }
   function run(it) {
@@ -429,44 +452,60 @@
     });
   }
 
+  // The browser reports when a covered picture comes into view, so nothing is
+  // measured while the page scrolls.
+  var seen = window.IntersectionObserver ? new IntersectionObserver(function (entries) {
+    for (var i = 0; i < entries.length; i++) if (entries[i].isIntersecting && entries[i].target._cover) entries[i].target._cover.seen = true;
+    start();
+  }, { rootMargin: "0px 0px -10% 0px" }) : null;
+
   // starts every covered picture that has come into view and has finished loading
-  function sweep() {
-    var limit = window.innerHeight * 0.9;
+  function start() {
     pending = pending.filter(function (it) {
-      var r = it.img.getBoundingClientRect();
-      if (!r.width || r.top > limit || r.bottom < 0 || !it.img.complete) return true;
+      if (!it.seen || !it.img.complete) return true;
+      if (seen) seen.unobserve(it.img);
       if (it.img.naturalWidth) run(it); else finish(it);   // a picture that failed to load is just uncovered
       return false;
     });
     if (!pending.length) {
       clearInterval(timer);
-      window.removeEventListener("scroll", sweep);
-      window.removeEventListener("resize", sweep);
+      if (seen) seen.disconnect();
     }
+  }
+  // A slow position check behind the observer, so a picture can never be left
+  // covered because a report was missed (or the browser has no observer).
+  function check() {
+    var limit = window.innerHeight * 0.9;
+    for (var i = 0; i < pending.length; i++) {
+      if (pending[i].seen) continue;
+      var r = pending[i].img.getBoundingClientRect();
+      if (r.width && r.top < limit && r.bottom > 0) pending[i].seen = true;
+    }
+    start();
   }
 
-  for (var k = 0; k < imgs.length; k++) {
-    var img = imgs[k], box = img.parentNode, canvas = document.createElement("canvas");
-    var ctx = canvas.getContext && canvas.getContext("2d");
-    if (!ctx) return;
+  var k, boxes = [], fixed = [];
+  for (k = 0; k < imgs.length; k++) { boxes.push(imgs[k].parentNode); fixed.push(getComputedStyle(imgs[k].parentNode).position !== "static"); }
+  for (k = 0; k < imgs.length; k++) {
+    var canvas = document.createElement("canvas"), ctx = canvas.getContext && canvas.getContext("2d");
+    if (!ctx) break;
     canvas.className = "reveal-cover";
     canvas.setAttribute("aria-hidden", "true");
-    if (getComputedStyle(box).position === "static") box.style.position = "relative";
-    box.appendChild(canvas);
-    var it = { img: img, canvas: canvas, ctx: ctx, p: 0, start: 0, grid: null, done: false, ro: null };
-    fit(it);
-    if (window.ResizeObserver) {
-      it.ro = new ResizeObserver((function (item) { return function () { if (!item.done) fit(item); }; })(it));
-      it.ro.observe(img);
-    }
-    img.addEventListener("load", sweep);
-    img.addEventListener("error", sweep);
+    if (!fixed[k]) boxes[k].style.position = "relative";
+    boxes[k].appendChild(canvas);
+    var it = { img: imgs[k], canvas: canvas, ctx: ctx, p: 0, start: 0, grid: null, done: false, seen: false, w: 0, h: 0, x: 0, y: 0 };
+    imgs[k]._cover = it;
     pending.push(it);
   }
-  window.addEventListener("scroll", sweep, { passive: true });
-  window.addEventListener("resize", sweep);
-  timer = setInterval(sweep, 300);
-  sweep();
+  placeAll(pending);
+  pending.forEach(function (it) {
+    if (resized) resized.observe(it.img);
+    if (seen) seen.observe(it.img);
+    it.img.addEventListener("load", start);
+    it.img.addEventListener("error", start);
+  });
+  timer = setInterval(check, seen ? 1500 : 300);
+  if (!seen) check();
 })();
 
 // The hero terminal. Everything it prints comes from the page's own content,

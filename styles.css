@@ -476,7 +476,7 @@ img.chip__logo { border-radius: 5px; filter: grayscale(1) brightness(1.15); tran
 
 /* Pixel reveal: the grid of squares main.js lays over a picture until it has
    scrolled into view. It sits exactly on the picture and never takes a click. */
-.reveal-cover { position: absolute; display: block; pointer-events: none; }
+.reveal-cover { position: absolute; display: block; pointer-events: none; image-rendering: crisp-edges; image-rendering: pixelated; }
 .type-caret { margin: 0 1px; }
 .block__head p .type-caret { height: 0.95em; }
 
