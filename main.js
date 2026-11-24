@@ -826,6 +826,7 @@ window.__desk = (function () {
   if (!wrap || !DESK) return;
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { wrap.classList.add("is-still"); return; }
 
+  wrap.classList.add("is-live");                       // the plug works from here on: its hints may show
   var POSES = ["typing", "idle", "reach", "gaming", "win", "shock", "grab", "windup", "throw", "tug", "guard"];
   var gen = 0;            // goes up whenever he changes his mind, so steps planned earlier are dropped
   var busy = false;       // in the middle of the plug scene
@@ -981,7 +982,8 @@ window.__desk = (function () {
     }
     busy = true; gen++; pulls++;
     clearTimeout(idleTimer); clearTimeout(winTimer);
-    flag("is-watch", false); flag("has-pad", false);
+    flag("is-watch", false); flag("is-glance", false); flag("has-pad", false);
+    flag("is-known", true);                              // the visitor has found the plug: the hints can stop
     flag("is-unplugged", true); flag("is-off", true);
     DESK.setPower(false);
 
@@ -1013,6 +1015,26 @@ window.__desk = (function () {
     hit.addEventListener("pointerleave", function () { flag("is-watch", false); });
     hit.addEventListener("click", pull);
   }
+
+  // He does not trust anyone near that plug: every so often he stops to check on
+  // it, and he checks at once when the mouse comes close to his corner.
+  var lastGlance = 0, lastMove = 0;
+  function glance() {
+    if (busy || guarding || wrap.classList.contains("is-watch")) return;
+    lastGlance = Date.now();
+    flag("is-glance", true);
+    setTimeout(function () { flag("is-glance", false); }, 850);
+  }
+  (function nervous() { setTimeout(function () { glance(); nervous(); }, 8000 + Math.random() * 7000); })();
+  document.addEventListener("pointermove", function (e) {
+    if (e.pointerType === "touch") return;
+    var now = Date.now();
+    if (now - lastMove < 200 || now - lastGlance < 3000) return;
+    lastMove = now;
+    var r = wrap.getBoundingClientRect();
+    var dx = Math.max(r.left - e.clientX, 0, e.clientX - r.right), dy = Math.max(r.top - e.clientY, 0, e.clientY - r.bottom);
+    if (dx * dx + dy * dy < 150 * 150) glance();
+  });
 
   DESK.watch(settle);
   pose(DESK.typing > 0 ? "typing" : "idle");

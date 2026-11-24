@@ -750,8 +750,8 @@ h1, h2, h3, .hero__name, .lane__label { font-weight: 700; text-transform: capita
 .buddy.is-throw  { --lean: -15deg; --head: -5deg; --near-1: 78deg; --near-2: 8deg; --far-1: -20deg; --far-2: 40deg; --t: 0.12s; --ease: cubic-bezier(0.2, 0.9, 0.3, 1); }
 .buddy.is-tug    { --lean: -18deg; --head: -9deg; --near-1: 44deg; --near-2: 52deg; --far-1: 30deg; --far-2: 66deg; --t: 0.3s; }
 .buddy.is-guard  { --lean: -9deg; --head: 4deg; --near-1: 38deg; --near-2: 60deg; --far-1: 16deg; --far-2: 88deg; }
-/* the mouse is on his plug: he stops and looks at it */
-.buddy.is-watch  { --lean: -7deg; --head: -17deg; --t: 0.2s; }
+/* the mouse is on his plug, or he is just checking on it: he stops and looks */
+.buddy.is-watch, .buddy.is-glance { --lean: -7deg; --head: -17deg; --t: 0.2s; }
 
 /* the small repeating movements */
 .buddy.is-typing .b-fore--near > .b-l { animation: buddy-tap 0.23s ease-in-out infinite alternate; }
@@ -768,9 +768,32 @@ h1, h2, h3, .hero__name, .lane__label { font-weight: 700; text-transform: capita
 .buddy.is-win .b-lean > .b-l { animation: buddy-hop 0.3s ease-out 3 alternate; }
 .buddy.is-shock .b-lean > .b-l { animation: buddy-shiver 0.08s linear infinite alternate; }
 .buddy.is-no .b-head > .b-l { animation: buddy-no 0.16s ease-in-out 4 alternate; }
-.buddy.is-watch .b-l, .buddy.is-watch .b-glow path { animation-play-state: paused; }
+.buddy.is-watch .b-l, .buddy.is-watch .b-glow path, .buddy.is-glance .b-l, .buddy.is-glance .b-glow path { animation-play-state: paused; }
 .buddy__art .b-eye { transform-box: fill-box; transform-origin: center; animation: buddy-blink 4.3s infinite; }
 .buddy__art .b-steam { animation: buddy-steam 2.6s ease-in-out infinite; }
+
+/* Hints that the plug can be pulled, shown only once the script is running
+   (.is-live). The plug glows all the time it is in the wall. Until the first
+   pull (.is-known) it also twitches and sparks every few seconds, and a tag
+   beside it says not to. */
+.buddy__art .b-halo { fill: var(--green); stroke: none; opacity: 0; }
+.buddy__art .b-spark { opacity: 0; stroke-width: 1.6; transform-origin: 14px 142px; }
+.buddy__art .b-plug-w { transform-origin: 14px 152px; }
+.buddy.is-live:not(.is-unplugged) .b-halo { animation: buddy-halo 2.2s ease-in-out infinite; }
+.buddy.is-live:not(.is-known):not(.is-unplugged) .b-plug-w { animation: buddy-twitch 3.6s ease-in-out infinite; }
+.buddy.is-live:not(.is-known):not(.is-unplugged) .b-spark { animation: buddy-spark 3.6s linear infinite; }
+.buddy__sign {
+  position: absolute; right: calc(100% - 10px); top: 30%; padding: 4px 8px 5px;
+  border: 1px dashed var(--green); border-radius: 6px; background: color-mix(in srgb, var(--ink) 92%, transparent);
+  color: var(--green); font: 600 10px/1.25 var(--sans); letter-spacing: 0.08em; text-transform: uppercase;
+  text-align: center; white-space: nowrap; transform: rotate(-6deg); opacity: 0; transition: opacity 0.4s;
+}
+.buddy__sign svg {
+  position: absolute; left: calc(100% - 22px); top: calc(100% + 1px); width: 26px; height: auto; overflow: visible;
+  fill: none; stroke: var(--green); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+}
+.buddy.is-live .buddy__sign { opacity: 1; animation: buddy-sign 3.6s ease-in-out infinite; }
+.buddy.is-live.is-known .buddy__sign { opacity: 0; animation: none; }
 
 /* the plug out of the wall, and the laptop without power */
 .buddy.is-unplugged .b-plug { transform-origin: 14px 139px; transform: translate(-3px, -13px) rotate(-16deg); }
@@ -785,6 +808,10 @@ h1, h2, h3, .hero__name, .lane__label { font-weight: 700; text-transform: capita
 .buddy.is-still .b-plug-hit { pointer-events: none; }
 .buddy.is-still .b-eye, .buddy.is-still .b-steam { animation: none; }
 
+@keyframes buddy-halo { 0%, 100% { opacity: 0.05; } 50% { opacity: 0.22; } }
+@keyframes buddy-twitch { 0%, 82%, 100% { transform: rotate(0deg); } 86% { transform: rotate(-9deg); } 90% { transform: rotate(8deg); } 94% { transform: rotate(-5deg); } 97% { transform: rotate(3deg); } }
+@keyframes buddy-spark { 0%, 84%, 100% { opacity: 0; transform: scale(0.6); } 88% { opacity: 1; transform: scale(1); } 95% { opacity: 0; transform: scale(1.35); } }
+@keyframes buddy-sign { 0%, 100% { transform: rotate(-6deg) translateY(0); } 50% { transform: rotate(-6deg) translateY(-3px); } }
 @keyframes buddy-tap { from { transform: rotate(-3.2deg); } to { transform: rotate(2.4deg); } }
 @keyframes buddy-bob { from { transform: rotate(-1.6deg); } to { transform: rotate(1.8deg); } }
 @keyframes buddy-code { from { transform: scaleX(0.25); } to { transform: scaleX(1); } }
@@ -818,6 +845,7 @@ h1, h2, h3, .hero__name, .lane__label { font-weight: 700; text-transform: capita
   .buddy { width: 92px; right: 4px; }
   .buddy__art * { stroke-width: 2.6; }
   .buddy__art .b-hatch { stroke-width: 1.2; }
+  .buddy__sign { top: 2%; right: calc(100% - 6px); font-size: 9px; padding: 3px 6px 4px; }
   /* a finger needs more to aim at than the drawn plug */
   .buddy__art .b-plug-hit { transform-box: fill-box; transform-origin: center; transform: scale(2); }
 }
