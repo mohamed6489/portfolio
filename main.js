@@ -1,3 +1,28 @@
+// The desk. Everything on the page that types tells it when it starts and stops,
+// and the character at the bottom of the screen reads that to know whether to
+// type or play. Pulling his plug cuts the power: whatever is typing stops where
+// it is and carries on when the power is back.
+window.__desk = (function () {
+  var watchers = [], waiting = [];
+  function tell() { for (var i = 0; i < watchers.length; i++) watchers[i](desk); }
+  var desk = {
+    typing: 0,
+    power: true,
+    begin: function () { desk.typing++; tell(); },
+    end: function () { desk.typing = Math.max(0, desk.typing - 1); tell(); },
+    // true when the caller has to stop here; it is called again once the power is back
+    held: function (again) { if (desk.power) return false; waiting.push(again); return true; },
+    setPower: function (on) {
+      if (desk.power === on) return;
+      desk.power = on;
+      if (on) { var w = waiting; waiting = []; for (var i = 0; i < w.length; i++) w[i](); }
+      tell();
+    },
+    watch: function (fn) { watchers.push(fn); }
+  };
+  return desk;
+})();
+
 // Navigation: the menu button on small screens, and marking the section in view.
 (function () {
   var toggle = document.querySelector(".nav__toggle");
@@ -153,6 +178,9 @@
     var ink = !!(over && over.closest(".btn--solid, .skip"));   // on a green button the pointer turns dark to stay visible
     dot.classList.toggle("is-ink", ink);
     ring.classList.toggle("is-ink", ink);
+    var away = !!(over && over.closest(".b-plug-hit"));  // over the character's plug the pointer is a hand
+    dot.classList.toggle("is-away", away);
+    ring.classList.toggle("is-away", away);
     if (!frame) frame = requestAnimationFrame(paint);
   });
   document.addEventListener("pointerdown", function (e) {
@@ -171,6 +199,7 @@
 (function () {
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
+  var DESK = window.__desk;
   var HEADINGS = ".block__head h2";
   var PARAGRAPHS = ".hero__tag, .hero__lede, .hero__open, .block__head p, .card__what, .card__role, " +
     ".card__points li, .services p, .timeline p, .lanes__note";
@@ -197,11 +226,14 @@
     var perTick = Math.max(1, Math.ceil(len / (total / tick)));
     if (perTick === 1) tick = Math.max(16, Math.min(60, total / Math.max(1, len)));
     part.caret.hidden = false;
+    DESK.begin();
     (function step() {
+      if (DESK.held(step)) return;
       n = Math.min(len, n + perTick);
       part.done.textContent = part.text.slice(0, n);
       part.wait.textContent = part.text.slice(n);
       if (n < len) return setTimeout(step, tick);
+      DESK.end();
       setTimeout(function () { part.caret.hidden = true; }, hold);
     })();
   }
@@ -222,6 +254,8 @@
 
   var queue = [], draining = false;
   function drain() {
+    draining = true;
+    if (DESK.held(drain)) return;                       // no power: the next piece waits with the rest
     // Whatever has left the screen since it was queued is shown whole, so the
     // text in front of the reader never waits its turn behind text they have
     // already scrolled past. All positions are read first, then the page is changed.
@@ -306,11 +340,15 @@
   caret.className = "caret hero__caret"; caret.setAttribute("aria-hidden", "true");
   wait.className = "type-wait"; wait.textContent = text;
   el.append(done, caret, wait);
+  var DESK = window.__desk;
+  DESK.begin();
   setTimeout(function tick() {
+    if (DESK.held(tick)) return;
     n++;
     done.textContent = text.slice(0, n);
     wait.textContent = text.slice(n);
     if (n < text.length) setTimeout(tick, 105);
+    else DESK.end();
   }, 350);
 })();
 
@@ -756,10 +794,13 @@
     if (i >= intro.length) { input.disabled = false; return; }
     var cmd = intro[i], n = 0;
     var p = line("cmd", "<span class=\"caret\"></span>");
+    window.__desk.begin();
     (function tick() {
+      if (window.__desk.held(tick)) return;
       n++;
       p.innerHTML = esc(cmd.slice(0, n)) + "<span class=\"caret\"></span>";
       if (n < cmd.length) return setTimeout(tick, 55);
+      window.__desk.end();
       setTimeout(function () {
         p.remove();
         run(cmd);
@@ -768,4 +809,212 @@
     })();
   }
   setTimeout(function () { typeCmd(0); }, 500);
+})();
+
+// The character at the bottom right. He types while the page's text is being
+// typed, and when it has been quiet for a moment he takes a controller from
+// under the desk and plays. Pull his plug (the mouse turns into a hand over it,
+// and he looks round) and the laptop dies, the page's typing stops, and he
+// throws a slipper that grows towards the middle of the screen, hits the glass,
+// cracks it and drops. Then he tugs the cable, the plug goes back in, and
+// everything carries on. The second pull earns two slippers; after the third he
+// keeps hold of the cable for a while and the plug will not come out.
+// With reduced motion he sits still and the plug is only a drawing.
+(function () {
+  var wrap = document.querySelector(".buddy");
+  var DESK = window.__desk;
+  if (!wrap || !DESK) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { wrap.classList.add("is-still"); return; }
+
+  var POSES = ["typing", "idle", "reach", "gaming", "win", "shock", "grab", "windup", "throw", "tug", "guard"];
+  var gen = 0;            // goes up whenever he changes his mind, so steps planned earlier are dropped
+  var busy = false;       // in the middle of the plug scene
+  var playing = false;    // the controller is what he goes back to when nothing is being typed
+  var guarding = false, pulls = 0, idleTimer = 0, winTimer = 0;
+
+  function pose(name) { for (var i = 0; i < POSES.length; i++) wrap.classList.toggle("is-" + POSES[i], POSES[i] === name); }
+  function has(name) { return wrap.classList.contains("is-" + name); }
+  function flag(name, on) { wrap.classList.toggle(name, on); }
+  function later(ms, fn) { var g = gen; setTimeout(function () { if (g === gen) fn(); }, ms); }
+
+  function toTyping() {
+    gen++; clearTimeout(idleTimer); clearTimeout(winTimer);
+    if (!playing) { pose("typing"); return; }
+    playing = false;
+    pose("reach");                                     // puts the controller back under the desk first
+    later(300, function () { flag("has-pad", false); pose("typing"); });
+  }
+  function toGaming() {
+    gen++; clearTimeout(idleTimer);
+    playing = true;
+    pose("reach");
+    later(400, function () { flag("has-pad", true); pose("gaming"); cheer(); });
+  }
+  // every so often he wins something
+  function cheer() {
+    clearTimeout(winTimer);
+    winTimer = setTimeout(function () {
+      if (busy || !has("gaming")) return;
+      var g = gen;
+      pose("win");
+      setTimeout(function () { if (g === gen && !busy) { pose("gaming"); cheer(); } }, 950);
+    }, 6000 + Math.random() * 6000);
+  }
+  // keyboard or controller, from what the page is doing
+  function settle() {
+    if (busy || guarding) return;
+    clearTimeout(idleTimer);
+    if (DESK.typing > 0) { if (!has("typing")) toTyping(); return; }
+    if (playing) { if (!has("gaming") && !has("win") && !has("reach")) toGaming(); return; }
+    // typing has just stopped: hands rest after half a second, the controller comes out after a second more
+    idleTimer = setTimeout(function () {
+      if (busy || guarding || DESK.typing > 0) return;
+      gen++; pose("idle");
+      idleTimer = setTimeout(function () { if (!busy && !guarding && DESK.typing === 0) toGaming(); }, 1000);
+    }, 500);
+  }
+  function resume() {
+    busy = false;
+    if (DESK.typing > 0) { playing = false; gen++; pose("typing"); }
+    else if (playing) toGaming();
+    else { gen++; pose("idle"); settle(); }
+  }
+
+  // ---------- the slipper ----------
+  var SLIPPER = "<svg viewBox='0 0 100 44' aria-hidden='true' focusable='false'>" +
+    "<path d='M4 22C4 8 18 4 34 5H70C88 5 96 12 96 22S88 39 70 39H34C18 40 4 36 4 22Z'/>" +
+    "<path class='b-line' d='M76 14v16M83 16v12M89 19v6'/>" +
+    "<path d='M26 22Q42 5 67 5L67 11Q46 12 34 22Q46 32 67 33L67 39Q42 39 26 22Z'/>" +
+    "<circle cx='30' cy='22' r='2.4'/></svg>";
+
+  function at(x, y, scale, deg) {
+    return "translate(" + x.toFixed(1) + "px," + y.toFixed(1) + "px) translate(-50%,-50%) scale(" + scale.toFixed(3) + ") rotate(" + deg + "deg)";
+  }
+  function launch(nth) {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var r = wrap.querySelector(".b-hand--near").getBoundingClientRect();
+    var sx = r.left + r.width / 2, sy = r.top + r.height / 2;
+    var tx = vw / 2 + (nth ? vw * 0.13 : -vw * 0.05), ty = vh / 2 + (nth ? -vh * 0.09 : vh * 0.03);
+    var big = Math.min(vw, vh) * 0.6 / 100;            // the element is 100px wide
+    var el = document.createElement("div");
+    el.className = "buddy-fly";
+    el.setAttribute("aria-hidden", "true");
+    el.innerHTML = SLIPPER;
+    if (!el.animate) { impact(tx, ty); return; }
+    el.style.transform = at(sx, sy, 0.2, -40);
+    document.body.appendChild(el);
+    var spin = nth ? -380 : 400;
+    // Plain timers decide when it hits and when it is gone, so a browser that is
+    // drawing slowly (a tab in the background) still gets the hit and the clean-up.
+    el.animate([{ transform: at(sx, sy, 0.2, -40) }, { transform: at(tx, ty, big, spin) }],
+      { duration: 620, easing: "cubic-bezier(0.5, 0, 0.85, 0.6)", fill: "forwards" });
+    setTimeout(function () {
+      impact(tx, ty);
+      el.animate([
+        { transform: at(tx, ty, big, spin), offset: 0 },
+        { transform: at(tx, ty + 8, big * 0.95, spin + 4), offset: 0.2 },
+        { transform: at(tx - 30, vh + big * 70, big * 0.9, spin + 70), offset: 1 }
+      ], { duration: 1150, easing: "cubic-bezier(0.6, 0, 1, 0.7)", fill: "forwards" });
+    }, 620);
+    setTimeout(function () { el.remove(); }, 620 + 1150 + 60);
+  }
+  // the screen takes the hit: the page jolts and the glass cracks
+  function impact(x, y) {
+    var shake = [{ transform: "translate(0,0)" }, { transform: "translate(-7px,5px)" }, { transform: "translate(6px,-4px)" },
+      { transform: "translate(-4px,3px)" }, { transform: "translate(2px,-1px)" }, { transform: "translate(0,0)" }];
+    Array.prototype.forEach.call(document.querySelectorAll("body > header, body > main, body > footer"), function (el) {
+      if (el.animate) el.animate(shake, { duration: 360, easing: "ease-out" });
+    });
+    crack(x, y);
+  }
+  function crack(x, y) {
+    var NS = "http://www.w3.org/2000/svg";
+    var size = Math.min(window.innerWidth, window.innerHeight) * 0.95;
+    var svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("class", "buddy-crack");
+    svg.setAttribute("viewBox", "-100 -100 200 200");
+    svg.setAttribute("aria-hidden", "true");
+    svg.style.left = x + "px"; svg.style.top = y + "px"; svg.style.width = svg.style.height = size + "px";
+    function line(d, thin) {
+      var p = document.createElementNS(NS, "path");
+      p.setAttribute("d", d);
+      p.setAttribute("pathLength", "1");
+      if (thin) p.setAttribute("class", "b-thin");
+      svg.appendChild(p);
+    }
+    var rays = 9 + Math.floor(Math.random() * 3), inner = [], outer = [];
+    for (var i = 0; i < rays; i++) {
+      var a = (i / rays) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+      var len = 48 + Math.random() * 50, steps = 3 + Math.floor(Math.random() * 2), d = "M0 0", px = 0, py = 0;
+      for (var s = 1; s <= steps; s++) {
+        var aa = a + (Math.random() - 0.5) * 0.3, rr = len * s / steps;
+        px = Math.cos(aa) * rr; py = Math.sin(aa) * rr;
+        d += "L" + px.toFixed(1) + " " + py.toFixed(1);
+        if (s === 1) inner.push([px, py]);
+        if (s === 2) outer.push([px, py]);
+      }
+      line(d, false);
+      if (Math.random() < 0.65) {                        // a short side crack
+        var ba = a + (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.5), bl = 8 + Math.random() * 14;
+        line("M" + (px * 0.6).toFixed(1) + " " + (py * 0.6).toFixed(1) + "l" + (Math.cos(ba) * bl).toFixed(1) + " " + (Math.sin(ba) * bl).toFixed(1), true);
+      }
+    }
+    // the rings that join the cracks round the point of the hit; the outer one has gaps
+    [inner, outer].forEach(function (ring, which) {
+      for (var k = 0; k < ring.length; k++) {
+        if (which && Math.random() < 0.4) continue;
+        var p1 = ring[k], p2 = ring[(k + 1) % ring.length];
+        line("M" + p1[0].toFixed(1) + " " + p1[1].toFixed(1) + "L" + p2[0].toFixed(1) + " " + p2[1].toFixed(1), true);
+      }
+    });
+    document.body.appendChild(svg);
+    setTimeout(function () { svg.remove(); }, 2600);
+  }
+
+  // ---------- the plug ----------
+  function pull() {
+    if (busy) return;
+    if (guarding) {                                      // he has hold of the cable: a shake of the head, no more
+      flag("is-no", true);
+      setTimeout(function () { flag("is-no", false); }, 700);
+      return;
+    }
+    busy = true; gen++; pulls++;
+    clearTimeout(idleTimer); clearTimeout(winTimer);
+    flag("is-watch", false); flag("has-pad", false);
+    flag("is-unplugged", true); flag("is-off", true);
+    DESK.setPower(false);
+
+    var throws = pulls >= 2 ? 2 : 1, t = 460;
+    pose("shock");
+    for (var i = 0; i < throws; i++) {
+      (function (nth, start) {
+        later(start, function () { pose("grab"); });
+        later(start + 380, function () { flag("has-slipper", true); pose("windup"); });
+        later(start + 720, function () { pose("throw"); flag("has-slipper", false); launch(nth); });
+      })(i, t);
+      t += 980;
+    }
+    t += 1300;                                           // the last slipper is in the air, then on the glass
+    later(t, function () { pose("tug"); });
+    later(t + 380, function () { flag("is-unplugged", false); });
+    later(t + 780, function () { flag("is-off", false); DESK.setPower(true); });
+    later(t + 1150, function () {
+      if (pulls < 3) { resume(); return; }
+      busy = false; guarding = true;
+      pose("guard");
+      setTimeout(function () { guarding = false; pulls = 0; resume(); }, 20000);
+    });
+  }
+
+  var hit = wrap.querySelector(".b-plug-hit");
+  if (hit) {
+    hit.addEventListener("pointerenter", function (e) { if (!busy && e.pointerType !== "touch") flag("is-watch", true); });
+    hit.addEventListener("pointerleave", function () { flag("is-watch", false); });
+    hit.addEventListener("click", pull);
+  }
+
+  DESK.watch(settle);
+  pose(DESK.typing > 0 ? "typing" : "idle");
+  settle();
 })();

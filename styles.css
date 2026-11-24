@@ -7,6 +7,8 @@
   --text: #e3ebe1;
   --dim: #8d9b90;          /* secondary text: 6.6:1 against the page */
   --green: #4fe08a;        /* the one accent */
+  /* a green hand: the pointer over the character's plug */
+  --cur-hand: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cg transform='translate(2 2)' stroke='%23050706' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13v-8.5a1.5 1.5 0 0 1 3 0v5a1.5 1.5 0 0 1 3 0v1a1.5 1.5 0 0 1 3 0v1a1.5 1.5 0 0 1 3 0v4.5a6 6 0 0 1-6 6h-1.8a6 6 0 0 1-5-2.7c-.5-.8-1.6-2.7-3.5-6a1.5 1.5 0 0 1 .5-2a1.9 1.9 0 0 1 2.3.3z' fill='%234fe08a' stroke-width='1.6'/%3E%3Cpath d='M11 9.5v3M14 10.5v2M17 11.5v1.5' fill='none' stroke-width='1.3'/%3E%3C/g%3E%3C/svg%3E") 11 4, pointer;
   --green-hover: #7beaa7;
   --green-deep: #173a26;
   --amber: #e6b450;        /* status only */
@@ -684,3 +686,139 @@ h1, h2, h3, .hero__name, .lane__label { font-weight: 700; text-transform: capita
 .cursor__dot.is-ink::before { background: var(--ink); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35); }
 .cursor__ring.is-ink::before { border-color: var(--ink); background-color: rgba(5, 7, 6, 0.1); box-shadow: none; }
 @media (hover: none), (pointer: coarse) { .cursor { display: none; } }
+
+/* The character at the bottom right: a developer at a desk, drawn in green lines
+   only. He types while the page's text is being typed, and picks up a controller
+   when it stops. Pull his plug and he throws a slipper at the screen.
+   Every shape is filled with the page colour, so a shape in front hides the
+   lines behind it. A pose is a set of angles on the joints (the --variables on
+   .buddy); moving between poses is a transition, and the small repeating
+   movements run on an inner group (.b-l) so the two never fight. main.js picks
+   the pose. Without the script he sits in the typing pose and nothing moves. */
+.buddy {
+  position: fixed; right: clamp(6px, 2vw, 26px); bottom: 0; z-index: 25; width: 170px;
+  pointer-events: none; user-select: none;
+  --lean: -3deg; --head: -2deg; --near-1: 22deg; --near-2: 80deg; --hand: 0deg; --far-1: 14deg; --far-2: 92deg;
+  --t: 0.38s; --ease: cubic-bezier(0.3, 1.25, 0.5, 1);
+}
+/* a soft patch of the page colour behind him, so text passing under does not tangle with the lines */
+.buddy::before {
+  content: ""; position: absolute; inset: -14% -10% 0 -10%; z-index: -1;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--ink) 94%, transparent) 58%, transparent);
+}
+.buddy__art { display: block; width: 100%; height: auto; overflow: visible; }
+.buddy__art * { fill: none; stroke: var(--green); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.buddy__art rect, .buddy__art circle, .buddy__art .b-solid { fill: var(--ink); }
+.buddy__art .b-hatched { fill: url(#buddy-hatch); }
+.buddy__art .b-hatch { stroke-width: 1; }
+.buddy__art .b-eye, .buddy__art .b-dot { fill: var(--green); stroke: none; }
+.buddy__art .b-floor { opacity: 0.35; }
+.buddy__art .b-steam, .buddy__art .b-glow path { opacity: 0.6; stroke-width: 1.6; }
+.buddy__art .b-upper--far, .buddy__art .b-upper--far * { stroke: #2f8a55; }
+.buddy__art .b-only-hood, .buddy--hood .b-only-face { display: none; }
+.buddy--hood .b-only-hood { display: inline; }
+.buddy__art .b-pad, .buddy__art .b-slipper, .buddy__art .b-cable--out { display: none; }
+.buddy.has-pad .b-pad, .buddy.has-slipper .b-slipper { display: inline; }
+
+/* joints */
+.buddy__art .b-lean, .buddy__art .b-head, .buddy__art .b-upper, .buddy__art .b-fore, .buddy__art .b-hand, .buddy__art .b-plug {
+  transition: transform var(--t) var(--ease);
+}
+.buddy__art .b-lean { transform-origin: 166px 138px; transform: rotate(var(--lean)); }
+.buddy__art .b-head { transform-origin: 150px 80px; transform: rotate(var(--head)); }
+.buddy__art .b-upper { transform-origin: 150px 94px; }
+.buddy__art .b-fore { transform-origin: 150px 119px; }
+.buddy__art .b-hand { transform-origin: 150px 153px; }
+.buddy__art .b-upper--near { transform: rotate(var(--near-1)); }
+.buddy__art .b-fore--near { transform: rotate(var(--near-2)); }
+.buddy__art .b-hand--near { transform: rotate(var(--hand)); }
+.buddy__art .b-upper--far { transform: rotate(var(--far-1)); }
+.buddy__art .b-fore--far { transform: rotate(var(--far-2)); }
+.buddy__art .b-lean > .b-l { transform-origin: 166px 138px; }
+.buddy__art .b-head > .b-l { transform-origin: 150px 80px; }
+.buddy__art .b-fore > .b-l { transform-origin: 150px 119px; }
+.buddy__art .b-hand > .b-l { transform-origin: 150px 153px; }
+
+/* poses */
+.buddy.is-idle   { --lean: -1deg; --head: 1deg; --near-1: 20deg; --near-2: 78deg; --far-1: 12deg; --far-2: 88deg; }
+.buddy.is-reach  { --lean: -10deg; --head: -8deg; --near-1: 36deg; --near-2: 12deg; --far-1: 16deg; --far-2: 84deg; --t: 0.3s; }
+.buddy.is-gaming { --lean: 7deg; --head: 2deg; --near-1: -25deg; --near-2: 135deg; --hand: -117deg; --far-1: -31deg; --far-2: 139deg; }
+.buddy.is-win    { --lean: 11deg; --head: 9deg; --near-1: 152deg; --near-2: -22deg; --hand: -40deg; --far-1: 138deg; --far-2: -14deg; --t: 0.28s; }
+.buddy.is-shock  { --lean: 9deg; --head: 10deg; --near-1: 118deg; --near-2: 42deg; --far-1: 104deg; --far-2: 52deg; --t: 0.16s; }
+.buddy.is-grab   { --lean: -22deg; --head: -12deg; --near-1: 30deg; --near-2: 6deg; --far-1: 20deg; --far-2: 70deg; --t: 0.3s; }
+.buddy.is-windup { --lean: 13deg; --head: 6deg; --near-1: -138deg; --near-2: -62deg; --hand: -20deg; --far-1: 40deg; --far-2: 70deg; --t: 0.26s; }
+.buddy.is-throw  { --lean: -15deg; --head: -5deg; --near-1: 78deg; --near-2: 8deg; --far-1: -20deg; --far-2: 40deg; --t: 0.12s; --ease: cubic-bezier(0.2, 0.9, 0.3, 1); }
+.buddy.is-tug    { --lean: -18deg; --head: -9deg; --near-1: 44deg; --near-2: 52deg; --far-1: 30deg; --far-2: 66deg; --t: 0.3s; }
+.buddy.is-guard  { --lean: -9deg; --head: 4deg; --near-1: 38deg; --near-2: 60deg; --far-1: 16deg; --far-2: 88deg; }
+/* the mouse is on his plug: he stops and looks at it */
+.buddy.is-watch  { --lean: -7deg; --head: -17deg; --t: 0.2s; }
+
+/* the small repeating movements */
+.buddy.is-typing .b-fore--near > .b-l { animation: buddy-tap 0.23s ease-in-out infinite alternate; }
+.buddy.is-typing .b-fore--far > .b-l { animation: buddy-tap 0.23s ease-in-out -0.115s infinite alternate; }
+.buddy.is-typing .b-head > .b-l { animation: buddy-bob 1.3s ease-in-out infinite alternate; }
+.buddy.is-typing .b-glow path { transform-box: fill-box; transform-origin: left center; animation: buddy-code 0.9s steps(4) infinite; }
+.buddy.is-typing .b-glow path:nth-child(2) { animation-delay: -0.3s; }
+.buddy.is-typing .b-glow path:nth-child(3) { animation-delay: -0.6s; }
+.buddy.is-gaming .b-lean > .b-l { animation: buddy-sway 1.15s ease-in-out infinite alternate; }
+.buddy.is-gaming .b-head > .b-l { animation: buddy-bob 0.8s ease-in-out infinite alternate; }
+.buddy.is-gaming .b-hand > .b-l { animation: buddy-mash 0.17s ease-in-out infinite alternate; }
+.buddy.is-gaming .b-fore--near > .b-l { animation: buddy-jig 0.46s ease-in-out infinite alternate; }
+.buddy.is-gaming .b-fore--far > .b-l { animation: buddy-jig 0.46s ease-in-out -0.2s infinite alternate; }
+.buddy.is-win .b-lean > .b-l { animation: buddy-hop 0.3s ease-out 3 alternate; }
+.buddy.is-shock .b-lean > .b-l { animation: buddy-shiver 0.08s linear infinite alternate; }
+.buddy.is-no .b-head > .b-l { animation: buddy-no 0.16s ease-in-out 4 alternate; }
+.buddy.is-watch .b-l, .buddy.is-watch .b-glow path { animation-play-state: paused; }
+.buddy__art .b-eye { transform-box: fill-box; transform-origin: center; animation: buddy-blink 4.3s infinite; }
+.buddy__art .b-steam { animation: buddy-steam 2.6s ease-in-out infinite; }
+
+/* the plug out of the wall, and the laptop without power */
+.buddy.is-unplugged .b-plug { transform-origin: 14px 139px; transform: translate(-3px, -13px) rotate(-16deg); }
+.buddy.is-unplugged .b-cable--in { display: none; }
+.buddy.is-unplugged .b-cable--out { display: inline; }
+.buddy.is-off .b-glow { display: none; }
+.buddy.is-off .b-lid { stroke: #2f8a55; }
+.buddy__art .b-plug-hit { fill: transparent; stroke: none; pointer-events: all; cursor: var(--cur-hand); }
+.has-cursor .buddy .b-plug-hit { cursor: var(--cur-hand) !important; }
+.cursor.is-away { opacity: 0; }
+/* reduced motion: he sits still, and the plug is only a drawing */
+.buddy.is-still .b-plug-hit { pointer-events: none; }
+.buddy.is-still .b-eye, .buddy.is-still .b-steam { animation: none; }
+
+@keyframes buddy-tap { from { transform: rotate(-3.2deg); } to { transform: rotate(2.4deg); } }
+@keyframes buddy-bob { from { transform: rotate(-1.6deg); } to { transform: rotate(1.8deg); } }
+@keyframes buddy-code { from { transform: scaleX(0.25); } to { transform: scaleX(1); } }
+@keyframes buddy-sway { from { transform: rotate(-2.2deg); } to { transform: rotate(2.6deg); } }
+@keyframes buddy-mash { from { transform: rotate(-5deg); } to { transform: rotate(5deg); } }
+@keyframes buddy-jig { from { transform: rotate(-2deg); } to { transform: rotate(2.4deg); } }
+@keyframes buddy-hop { from { transform: translateY(0); } to { transform: translateY(-5px); } }
+@keyframes buddy-shiver { from { transform: translateX(-1px); } to { transform: translateX(1px); } }
+@keyframes buddy-no { from { transform: rotate(-9deg); } to { transform: rotate(9deg); } }
+@keyframes buddy-blink { 0%, 95%, 100% { transform: scaleY(1); } 97.5% { transform: scaleY(0.1); } }
+@keyframes buddy-steam { 0%, 100% { opacity: 0.2; transform: translateY(1px); } 50% { opacity: 0.7; transform: translateY(-2px); } }
+
+/* the slipper in the air, and the cracks it leaves where it hits the glass */
+.buddy-fly { position: fixed; left: 0; top: 0; z-index: 36; width: 100px; pointer-events: none; will-change: transform; }
+.buddy-fly svg { display: block; width: 100%; height: auto; overflow: visible; }
+.buddy-fly * { fill: var(--ink); stroke: var(--green); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.buddy-fly .b-line { fill: none; }
+.buddy-crack {
+  position: fixed; z-index: 35; pointer-events: none; overflow: visible; transform: translate(-50%, -50%);
+  animation: buddy-crack 2.5s ease-in forwards;
+}
+.buddy-crack path {
+  fill: none; stroke: var(--green); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  stroke-dasharray: 1; stroke-dashoffset: 1; animation: buddy-crack-draw 0.2s ease-out forwards;
+}
+.buddy-crack path.b-thin { stroke-width: 1.2; opacity: 0.7; animation-delay: 0.08s; }
+@keyframes buddy-crack { 0%, 72% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes buddy-crack-draw { to { stroke-dashoffset: 0; } }
+
+@media (max-width: 640px) {
+  .buddy { width: 92px; right: 4px; }
+  .buddy__art * { stroke-width: 2.6; }
+  .buddy__art .b-hatch { stroke-width: 1.2; }
+  /* a finger needs more to aim at than the drawn plug */
+  .buddy__art .b-plug-hit { transform-box: fill-box; transform-origin: center; transform: scale(2); }
+}
+@media print { .buddy { display: none; } }
